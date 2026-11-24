@@ -8,16 +8,23 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# URLs configuradas con tus filtros
-URL_FINCARAIZ = "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/bogota-y-en-usaquen-y-en-zona-norte/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4"
-URL_METROCUADRADO = "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/2.7-millones--m2/?search=form"
+# URLs enfocadas exclusivamente en las localidades/zonas de tu polígono
+URLS_FINCARAIZ = [
+    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias/pagina2?&IDmoneda=4",
+]
+
+URLS_METROCUADRADO = [
+    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-norte/2-o-mas-habitaciones/hasta-2.7-millones/desde-60-m2/?search=form",
+    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-noroccidente/2-o-mas-habitaciones/hasta-2.7-millones/desde-60-m2/?search=form",
+]
 
 # Tus criterios de filtrado
 MAX_TOTAL = 2700000
 MIN_HABITACIONES = 2
 MIN_AREA_M2 = 59.0
 
-# Polígono ampliado cubriendo las esquinas completas (incluye Cedritos, Polo Club, Alhambra, Colina, Chicó, Mazurén)
+# Polígono de ubicación
 POLIGONO_ZONA = [
     (4.745853, -74.089036),  # Nor-Occidente (Suba / Av. Boyacá con Calle 165)
     (4.663533, -74.089036),  # Sur-Occidente (Av. Boyacá con Calle 72)
@@ -88,14 +95,12 @@ def obtener_coordenadas(html):
 
 
 def extraer_canon_y_admin(html, texto_principal):
-    # 1. Intentar leer el precio exacto desde el JSON estructurado del inmueble (evita confundir con valor m² o similares)
     canon_val = 0
     json_price = re.search(r'"price"\s*:\s*(\d{6,9})', html)
     if json_price:
         canon_val = int(json_price.group(1))
 
     if canon_val == 0:
-        # Si no está en JSON, buscar montos en la parte superior de la ficha (primeros 2500 caracteres)
         precios_top = re.findall(r"\$\s?([\d\.]{6,11})(?!\s*/\s*m)", texto_principal[:2500])
         for p_str in precios_top:
             val = limpiar_monto(p_str)
@@ -103,7 +108,6 @@ def extraer_canon_y_admin(html, texto_principal):
                 canon_val = val
                 break
 
-    # 2. Buscar administración
     admin_val = 0
     json_admin = re.search(r'"(?:administration|adminPrice|commonExpenses)"\s*:\s*(\d{4,8})', html)
     if json_admin:
@@ -134,7 +138,6 @@ def extraer_datos_detalle(page, link, portal):
     else:
         link_maps = None
 
-    # Tomamos solo la ficha principal (antes de "Inmuebles similares" o "Recomendados")
     texto_completo = page.inner_text("body")
     corte_similares = re.split(r"Inmuebles similares|Propiedades similares|También te puede interesar", texto_completo, maxsplit=1, flags=re.IGNORECASE)
     texto_ficha = corte_similares[0]
@@ -215,7 +218,6 @@ def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
     page.goto(url_busqueda, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(4500)
 
-    # En Metrocuadrado, hacer clic en el desplegable de orden para seleccionar "Más reciente"
     if prefijo == "mc":
         try:
             selector_orden = page.locator("text=Más relevante").first
@@ -224,14 +226,12 @@ def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
                 page.wait_for_timeout(1000)
                 page.locator("text=Más reciente").first.click()
                 page.wait_for_timeout(3500)
-                print("Metrocuadrado: Ordenado por 'Más reciente' correctamente.")
-        except Exception as e:
-            print(f"Metrocuadrado: No se pudo cambiar orden automático ({e})")
+        except Exception:
+            pass
 
-    # Hacer 4 scrolls para cargar más tarjetas en pantalla
     for _ in range(4):
         page.mouse.wheel(0, 1800)
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(1200)
 
     anchors = page.locator("a[href*='/inmueble/'], a[href*='/apartamento'], a[href*='/casa']").all()
     for a in anchors:
@@ -247,7 +247,7 @@ def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
             prop_id = f"{prefijo}_{slug}"
             if prop_id not in [e[0] for e in enlaces]:
                 enlaces.append((prop_id, link_limpio))
-        if len(enlaces) >= 35:
+        if len(enlaces) >= 30:
             break
     return enlaces
 
@@ -267,12 +267,14 @@ def main():
         page = context.new_page()
         page.route("**/*", bloquear_recursos)
 
-        portales = [
-            (URL_FINCARAIZ, "https://www.fincaraiz.com.co", "fr", "Fincaraíz"),
-            (URL_METROCUADRADO, "https://www.metrocuadrado.com", "mc", "Metrocuadrado"),
+        busquedas = [
+            (URLS_FINCARAIZ[0], "https://www.fincaraiz.com.co", "fr", "Fincaraíz"),
+            (URLS_FINCARAIZ[1], "https://www.fincaraiz.com.co", "fr", "Fincaraíz"),
+            (URLS_METROCUADRADO[0], "https://www.metrocuadrado.com", "mc", "Metrocuadrado"),
+            (URLS_METROCUADRADO[1], "https://www.metrocuadrado.com", "mc", "Metrocuadrado"),
         ]
 
-        for url_busq, dominio, prefijo, nombre_portal in portales:
+        for url_busq, dominio, prefijo, nombre_portal in busquedas:
             try:
                 candidatos = recolectar_enlaces(page, url_busq, dominio, prefijo)
                 print(f"{nombre_portal}: {len(candidatos)} enlaces candidatos detectados.")
@@ -283,7 +285,7 @@ def main():
                     datos = extraer_datos_detalle(page, link, nombre_portal)
                     if datos:
                         nuevos_validos.append(datos)
-                    time.sleep(1.2)
+                    time.sleep(1.0)
             except Exception as e:
                 print(f"Error en {nombre_portal}: {e}")
 
