@@ -8,15 +8,14 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# URLs configuradas con tus filtros (Cundinamarca + precio en Fincaraíz para no perder bordes de Bogotá)
-URL_FINCARAIZ = "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/cundinamarca/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias"
+# URLs configuradas con tus filtros exactos
+URL_FINCARAIZ = "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/bogota-y-en-usaquen-y-en-zona-norte/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4"
 URL_METROCUADRADO = "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/2.7-millones--m2/?search=form"
 
 # Tus criterios de filtrado
 MAX_TOTAL = 2700000
 MIN_HABITACIONES = 2
 MIN_AREA_M2 = 59.0
-MIN_FOTOS = 4
 
 # Polígono de ubicación en orden perimetral
 POLIGONO_ZONA = [
@@ -88,21 +87,6 @@ def obtener_coordenadas(html):
     return None, None
 
 
-def contar_fotos_html(html):
-    # Busca URLs de fotos de inmuebles tanto en etiquetas <img> como en el JSON interno de la página
-    urls = re.findall(r'https?://[^"\'\s<>]+?\.(?:jpg|jpeg|webp)', html, re.IGNORECASE)
-    fotos_unicas = set()
-    for u in urls:
-        u_low = u.lower()
-        if any(bad in u_low for bad in ["logo", "icon", "banner", "avatar", "sprite", "favicon", "static"]):
-            continue
-        if any(cdn in u_low for cdn in ["fincaraiz", "metrocuadrado", "cloudfront", "amazonaws", "multimedia", "inmueble"]):
-            # Normaliza quitando parámetros de tamaño para no contar miniaturas duplicadas
-            base = u.split("?")[0].split("_")[0]
-            fotos_unicas.add(base)
-    return len(fotos_unicas)
-
-
 def extraer_datos_detalle(page, link, portal):
     page.goto(link, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(3500)
@@ -118,15 +102,9 @@ def extraer_datos_detalle(page, link, portal):
     else:
         link_maps = None
 
-    # 2. Validar cantidad mínima de fotos (desde HTML/JSON)
-    total_fotos = contar_fotos_html(html)
-    if total_fotos < MIN_FOTOS:
-        print(f"Descartado por pocas fotos ({total_fotos}/{MIN_FOTOS}): {link}")
-        return None
-
     texto_pagina = page.inner_text("body")
 
-    # 3. Validar Área privada / construida (>= 59 m²)
+    # 2. Validar Área privada / construida (>= 59 m²)
     match_area_priv = re.search(r"[ÁA]rea\s+privada[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_pagina, re.IGNORECASE)
     match_area_gen = re.search(r"(\d+(?:[.,]\d+)?)\s?m[²2]", texto_pagina, re.IGNORECASE)
     area_str = match_area_priv.group(1) if match_area_priv else (match_area_gen.group(1) if match_area_gen else None)
@@ -140,7 +118,7 @@ def extraer_datos_detalle(page, link, portal):
     else:
         tamano_fmt = "N/D"
 
-    # 4. Validar Habitaciones (>= 2)
+    # 3. Validar Habitaciones (>= 2)
     match_habs = re.search(r"(\d+)\s?(?:hab|habitaci|cuarto|alcoba)", texto_pagina, re.IGNORECASE)
     if match_habs:
         num_habs = int(match_habs.group(1))
@@ -151,7 +129,7 @@ def extraer_datos_detalle(page, link, portal):
     else:
         habs_fmt = "N/D"
 
-    # 5. Extraer Canon y Administración por separado y validar presupuesto (<= 2.700.000)
+    # 4. Extraer Canon y Administración por separado y validar presupuesto (<= 2.700.000)
     precios_encontrados = re.findall(r"\$\s?[\d\.]{6,12}", texto_pagina)
     canon_val = limpiar_monto(precios_encontrados[0]) if precios_encontrados else 0
 
@@ -182,7 +160,7 @@ def extraer_datos_detalle(page, link, portal):
         admin_fmt = "No especificada"
         total_fmt = canon_fmt
 
-    # 6. Parqueadero (Opcional)
+    # 5. Parqueadero (Opcional)
     match_parq = re.search(r"(\d+)\s?(?:parqueadero|garaje)", texto_pagina, re.IGNORECASE)
     if match_parq:
         parqueadero_fmt = f"Sí ({match_parq.group(1)})"
@@ -191,7 +169,7 @@ def extraer_datos_detalle(page, link, portal):
     else:
         parqueadero_fmt = "No especificado"
 
-    # 7. Título del inmueble
+    # 6. Título del inmueble
     h1 = page.locator("h1").first
     titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
 
@@ -204,7 +182,6 @@ def extraer_datos_detalle(page, link, portal):
         "habitaciones": habs_fmt,
         "tamano": tamano_fmt,
         "parqueadero": parqueadero_fmt,
-        "fotos": total_fotos,
         "link_maps": link_maps,
         "link": link,
     }
@@ -214,7 +191,6 @@ def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
     enlaces = []
     page.goto(url_busqueda, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(5000)
-    # Hacemos un pequeño scroll para que carguen más tarjetas
     page.mouse.wheel(0, 1500)
     page.wait_for_timeout(2000)
 
@@ -224,8 +200,9 @@ def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
         if not href:
             continue
         link = f"{dominio}{href}" if href.startswith("/") else href
-        # Limpiamos parámetros ?src_url=... en Metrocuadrado para que el ID sea único y limpio
         link_limpio = link.split("?")[0]
+        if "/pagina" in link_limpio:
+            continue
         if re.search(r"[-/]\d{5,}|[-/]M\d+", link_limpio):
             slug = link_limpio.rstrip("/").split("/")[-1]
             prop_id = f"{prefijo}_{slug}"
@@ -287,7 +264,6 @@ def main():
             f"🛏 <b>Habitaciones:</b> {apto['habitaciones']}\n"
             f"📐 <b>Tamaño:</b> {apto['tamano']}\n"
             f"🚗 <b>Parqueadero:</b> {apto['parqueadero']}\n"
-            f"📸 <b>Fotos:</b> {apto['fotos']}\n"
             f"{linea_maps}"
             f"🔗 <b>Publicación:</b> <a href='{apto['link']}'>Ver en {apto['portal']}</a>"
         )
