@@ -251,3 +251,45 @@ def main():
 
         for url_busq, dominio, prefijo, nombre_portal in portales:
             try:
+                candidatos = recolectar_enlaces(page, url_busq, dominio, prefijo)
+                print(f"{nombre_portal}: {len(candidatos)} enlaces candidatos detectados.")
+                for prop_id, link in candidatos:
+                    if prop_id in vistos:
+                        continue
+                    vistos.add(prop_id)
+                    datos = extraer_datos_detalle(page, link, nombre_portal)
+                    if datos:
+                        nuevos_validos.append(datos)
+                    time.sleep(1.5)
+            except Exception as e:
+                print(f"Error en {nombre_portal}: {e}")
+
+        browser.close()
+
+    for apto in nuevos_validos:
+        linea_maps = (
+            f"📍 <b>Ubicación:</b> <a href='{apto['link_maps']}'>Ver en Google Maps</a>\n"
+            if apto["link_maps"]
+            else "📍 <b>Ubicación:</b> Coordenadas no publicadas\n"
+        )
+        msg = (
+            f"🏢 <b>Apartamento:</b> {apto['titulo']}\n"
+            f"💰 <b>Canon:</b> {apto['canon']}\n"
+            f"🧾 <b>Administración:</b> {apto['admin']}\n"
+            f"💵 <b>Total estimado:</b> {apto['total']}\n"
+            f"🛏 <b>Habitaciones:</b> {apto['habitaciones']}\n"
+            f"📐 <b>Tamaño:</b> {apto['tamano']}\n"
+            f"🚗 <b>Parqueadero:</b> {apto['parqueadero']}\n"
+            f"📸 <b>Fotos:</b> {apto['fotos']}\n"
+            f"{linea_maps}"
+            f"🔗 <b>Publicación:</b> <a href='{apto['link']}'>Ver en {apto['portal']}</a>"
+        )
+        enviar_telegram(msg)
+        time.sleep(1)
+
+    guardar_vistos(vistos)
+    print(f"Proceso finalizado. Enviados: {len(nuevos_validos)}")
+
+
+if __name__ == "__main__":
+    main()
