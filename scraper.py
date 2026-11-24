@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# URLs enfocadas exclusivamente en las localidades/zonas de tu polígono
+# URLs enfocadas exclusivamente en tus localidades/zonas de interés
 URLS_FINCARAIZ = [
     "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4",
     "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias/pagina2?&IDmoneda=4",
@@ -19,17 +19,39 @@ URLS_METROCUADRADO = [
     "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-noroccidente/2-o-mas-habitaciones/hasta-2.7-millones/desde-60-m2/?search=form",
 ]
 
-# Tus criterios de filtrado
+# Criterios de filtrado
 MAX_TOTAL = 2700000
 MIN_HABITACIONES = 2
 MIN_AREA_M2 = 59.0
 
-# Polígono de ubicación
+# Polígono de ubicación exacto
 POLIGONO_ZONA = [
     (4.745853, -74.089036),  # Nor-Occidente (Suba / Av. Boyacá con Calle 165)
     (4.663533, -74.089036),  # Sur-Occidente (Av. Boyacá con Calle 72)
     (4.663533, -74.026123),  # Sur-Oriente (Carrera 7 con Calle 72)
     (4.745853, -74.026123),  # Nor-Oriente (Carrera 7 con Calle 165)
+]
+
+# Respaldo de barrios válidos dentro del polígono (se usa si un anuncio no publica coordenadas GPS)
+BARRIOS_PERMITIDOS = [
+    "cedritos", "cedro", "bella suiza", "bosques de pinos", "barrancas", "santa barbara",
+    "usaquen", "contador", "lisboa", "caobos", "capri", "molinos", "chico", "antiguo country",
+    "cabrera", "colina campestre", "colina", "mazuren", "prado veraniego", "spring", "sotileza",
+    "niza", "puente largo", "pasadena", "alhambra", "batan", "malibu", "monaco", "santa rosa",
+    "morato", "pontevedra", "julio florez", "andes norte", "rionegro", "santa maria del lago",
+    "castellana", "polo club", "patria", "rincon del chico", "entre rios", "simon bolivar",
+    "metropolis", "modelo norte", "alcazares", "las ferias", "gilmar", "cantagallo", "victoria norte",
+    "verbenal", "toberin", "san cristobal norte", "santa teresa", "acacias", "las margaritas",
+    "iberia", "gratamira", "ciudad jardin norte", "san patricio", "navarra", "remanzo", "madelena"
+]
+
+# Barrios/localidades excluidos explícitamente
+BARRIOS_EXCLUIDOS = [
+    "engativa", "el muelle", "fontibon", "bosa", "kennedy", "puente aranda", "subazar",
+    "tibabuyes", "el poa", "la gaitana", "bilbao", "compartir", "rincon de suba", "auren",
+    "villas de granada", "gran granada", "ciudad salitre", "salitre", "galerias", "teusaquillo",
+    "la soledad", "chapinero alto", "chapinero central", "rosales", "pardo rubio", "marly",
+    "centro internacional", "candelaria", "san cristobal sur", "usme", "tunjuelito", "rafael uribe"
 ]
 
 ARCHIVO_VISTOS = "vistos.json"
@@ -94,6 +116,14 @@ def obtener_coordenadas(html):
     return None, None
 
 
+def normalizar_texto(texto):
+    reemplazos = {"á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ñ": "n"}
+    t = texto.lower()
+    for k, v in reemplazos.items():
+        t = t.replace(k, v)
+    return t
+
+
 def extraer_canon_y_admin(html, texto_principal):
     canon_val = 0
     json_price = re.search(r'"price"\s*:\s*(\d{6,9})', html)
@@ -128,7 +158,16 @@ def extraer_datos_detalle(page, link, portal):
     page.wait_for_timeout(3000)
     html = page.content()
 
-    # 1. Validar polígono geográfico
+    h1 = page.locator("h1").first
+    titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
+    texto_ubicacion_norm = normalizar_texto(f"{link} {titulo}")
+
+    # Descartar explícitamente barrios lejanos conocidos (ej. Engativá, El Muelle, Fontibón, etc.)
+    if any(b_exc in texto_ubicacion_norm for b_exc in BARRIOS_EXCLUIDOS):
+        print(f"Descartado por barrio excluido: {link}")
+        return None
+
+    # 1. Validar polígono geográfico (o respaldo por barrio permitido si no hay GPS)
     lat, lon = obtener_coordenadas(html)
     if lat and lon:
         if not punto_en_poligono(lat, lon, POLIGONO_ZONA):
@@ -136,6 +175,9 @@ def extraer_datos_detalle(page, link, portal):
             return None
         link_maps = f"https://www.google.com/maps?q={lat},{lon}"
     else:
+        if not any(b_ok in texto_ubicacion_norm for b_ok in BARRIOS_PERMITIDOS):
+            print(f"Descartado por falta de coordenadas y barrio fuera de zona: {link}")
+            return None
         link_maps = None
 
     texto_completo = page.inner_text("body")
@@ -195,10 +237,6 @@ def extraer_datos_detalle(page, link, portal):
     else:
         parqueadero_fmt = "No especificado"
 
-    # 6. Título
-    h1 = page.locator("h1").first
-    titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
-
     return {
         "portal": portal,
         "titulo": titulo[:120],
@@ -229,25 +267,33 @@ def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
         except Exception:
             pass
 
-    for _ in range(4):
+    # 6 scrolls profundos para cargar más tarjetas en pantalla
+    for _ in range(6):
         page.mouse.wheel(0, 1800)
-        page.wait_for_timeout(1200)
+        page.wait_for_timeout(1100)
 
-    anchors = page.locator("a[href*='/inmueble/'], a[href*='/apartamento'], a[href*='/casa']").all()
+    anchors = page.locator("a[href]").all()
     for a in anchors:
         href = a.get_attribute("href")
         if not href:
             continue
         link = f"{dominio}{href}" if href.startswith("/") else href
         link_limpio = link.split("?")[0]
-        if "/pagina" in link_limpio:
+
+        # Ignorar páginas de listado/filtros (evita que envíe URLs de búsqueda)
+        if any(bad in link_limpio for bad in ["/pagina", "/arriendo/casas-y-apartamentos", "/apartamento-casa/arriendo", "/dolares", "/hasta-"]):
             continue
-        if re.search(r"[-/]\d{5,}|[-/]M\d+", link_limpio):
+
+        # Validar formato estricto de anuncio individual
+        es_ficha_fr = prefijo == "fr" and re.search(r"/(?:apartamento|casa)-en-arriendo-[^/]+/\d{6,}$", link_limpio)
+        es_ficha_mc = prefijo == "mc" and re.search(r"/inmueble/[^/]+/\d+-M\d+$", link_limpio)
+
+        if es_ficha_fr or es_ficha_mc:
             slug = link_limpio.rstrip("/").split("/")[-1]
             prop_id = f"{prefijo}_{slug}"
             if prop_id not in [e[0] for e in enlaces]:
                 enlaces.append((prop_id, link_limpio))
-        if len(enlaces) >= 30:
+        if len(enlaces) >= 40:
             break
     return enlaces
 
@@ -291,11 +337,12 @@ def main():
 
         browser.close()
 
+    # Solo envía mensajes si encontró nuevos apartamentos válidos; si hay 0, no envía nada
     for apto in nuevos_validos:
         linea_maps = (
             f"📍 <b>Ubicación:</b> <a href='{apto['link_maps']}'>Ver en Google Maps</a>\n"
             if apto["link_maps"]
-            else "📍 <b>Ubicación:</b> Coordenadas no publicadas\n"
+            else "📍 <b>Ubicación:</b> Zona dentro de polígono (sin pin exacto)\n"
         )
         msg = (
             f"🏢 <b>Apartamento:</b> {apto['titulo']}\n"

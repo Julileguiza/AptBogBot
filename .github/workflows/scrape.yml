@@ -2,7 +2,7 @@ name: Rastreador Diario de Apartamentos
 
 on:
   schedule:
-    - cron: '0 13-23 * * *'  # Cada hora entre las 8:00 a.m. y las 6:00 p.m. hora Colombia
+    - cron: '0 13-23,0-2 * * *'  # Cada hora de 8:00 a.m. a 9:00 p.m. hora Colombia
   workflow_dispatch:
 
 permissions:
