@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 import requests
 from playwright.sync_api import sync_playwright
@@ -7,9 +8,23 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# Pega aquí tus URLs con los filtros ya aplicados y ordenadas por "Más recientes"
-URL_FINCARAIZ = "https://www.fincaraiz.com.co/"
-URL_METROCUADRADO = "https://www.metrocuadrado.com/"
+# URLs configuradas con tus filtros
+URL_FINCARAIZ = "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/2-o-mas-habitaciones/m2-desde-60/edificados/publicado-ultimos-7-dias"
+URL_METROCUADRADO = "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/2.7-millones--m2/?search=form"
+
+# Tus criterios de filtrado
+MAX_TOTAL = 2700000
+MIN_HABITACIONES = 2
+MIN_AREA_M2 = 59.0
+MIN_FOTOS = 4
+
+# Polígono de ubicación en orden perimetral
+POLIGONO_ZONA = [
+    (4.695482, -74.089036),  # Esquina superior izquierda
+    (4.663533, -74.046968),  # Esquina inferior izquierda
+    (4.723641, -74.026123),  # Esquina inferior derecha
+    (4.745853, -74.066108),  # Esquina superior derecha
+]
 
 ARCHIVO_VISTOS = "vistos.json"
 
@@ -38,53 +53,185 @@ def enviar_telegram(mensaje):
 
 
 def bloquear_recursos(route):
-    # Acelera la carga bloqueando imágenes, fuentes y multimedia
     if route.request.resource_type in ["image", "media", "font"]:
         route.abort()
     else:
         route.continue_()
 
 
-def extraer_fincaraiz(page):
-    resultados = []
-    page.goto(URL_FINCARAIZ, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(4000)
+def limpiar_monto(texto_monto):
+    solo_digitos = re.sub(r"[^\d]", "", texto_monto)
+    return int(solo_digitos) if solo_digitos else 0
 
-    # Selecciona las tarjetas de inmuebles
-    cards = page.locator("a[href*='/inmueble/']").all()
-    for card in cards[:15]:  # Revisa los 15 más recientes
-        href = card.get_attribute("href")
+
+def formatear_pesos(valor):
+    return f"${valor:,.0f}".replace(",", ".")
+
+
+def punto_en_poligono(lat, lon, poligono):
+    dentro = False
+    j = len(poligono) - 1
+    for i in range(len(poligono)):
+        yi, xi = poligono[i]
+        yj, xj = poligono[j]
+        if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / (yj - yi + 1e-12) + xi):
+            dentro = not dentro
+        j = i
+    return dentro
+
+
+def obtener_coordenadas(html):
+    lat_match = re.search(r'"latitude"\s*:\s*(-?\d+\.\d+)', html)
+    lon_match = re.search(r'"longitude"\s*:\s*(-?\d+\.\d+)', html)
+    if lat_match and lon_match:
+        return float(lat_match.group(1)), float(lon_match.group(1))
+    return None, None
+
+
+def extraer_datos_detalle(page, link, portal):
+    page.goto(link, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(3000)
+    html = page.content()
+
+    # 1. Validar polígono geográfico
+    lat, lon = obtener_coordenadas(html)
+    if lat and lon:
+        if not punto_en_poligono(lat, lon, POLIGONO_ZONA):
+            print(f"Descartado por ubicación fuera de polígono ({lat}, {lon}): {link}")
+            return None
+        link_maps = f"https://www.google.com/maps?q={lat},{lon}"
+    else:
+        link_maps = None
+
+    # 2. Validar cantidad mínima de fotos
+    total_fotos = page.evaluate("""() => {
+        const imgs = Array.from(document.querySelectorAll('img'));
+        const validas = new Set();
+        for (const img of imgs) {
+            const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
+            if (!src || src.startsWith('data:') || src.includes('logo') || src.includes('icon') || src.includes('svg')) continue;
+            if (src.includes('fincaraiz') || src.includes('metrocuadrado') || src.includes('cloudfront') || src.includes('amazonaws') || src.includes('cdn')) {
+                validas.add(src.split('?')[0]);
+            }
+        }
+        return validas.size;
+    }""")
+
+    if total_fotos < MIN_FOTOS:
+        print(f"Descartado por pocas fotos ({total_fotos}/{MIN_FOTOS}): {link}")
+        return None
+
+    texto_pagina = page.inner_text("body")
+
+    # 3. Validar Área privada / construida (>= 59 m²)
+    match_area_priv = re.search(r"[ÁA]rea\s+privada[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_pagina, re.IGNORECASE)
+    match_area_gen = re.search(r"(\d+(?:[.,]\d+)?)\s?m[²2]", texto_pagina, re.IGNORECASE)
+    area_str = match_area_priv.group(1) if match_area_priv else (match_area_gen.group(1) if match_area_gen else None)
+
+    if area_str:
+        area_val = float(area_str.replace(",", "."))
+        if area_val < MIN_AREA_M2:
+            print(f"Descartado por área menor a {MIN_AREA_M2} m² ({area_val}): {link}")
+            return None
+        tamano_fmt = f"{area_str} m²"
+    else:
+        tamano_fmt = "N/D"
+
+    # 4. Validar Habitaciones (>= 2)
+    match_habs = re.search(r"(\d+)\s?(?:hab|habitaci|cuarto|alcoba)", texto_pagina, re.IGNORECASE)
+    if match_habs:
+        num_habs = int(match_habs.group(1))
+        if num_habs < MIN_HABITACIONES:
+            print(f"Descartado por menos de {MIN_HABITACIONES} habitaciones ({num_habs}): {link}")
+            return None
+        habs_fmt = str(num_habs)
+    else:
+        habs_fmt = "N/D"
+
+    # 5. Extraer Canon y Administración por separado y validar presupuesto (<= 2.700.000)
+    precios_encontrados = re.findall(r"\$\s?[\d\.]{6,12}", texto_pagina)
+    canon_val = limpiar_monto(precios_encontrados[0]) if precios_encontrados else 0
+
+    match_admin = re.search(r"administraci[oó]n[^\$\d]{0,25}\$\s?([\d\.]{4,10})", texto_pagina, re.IGNORECASE)
+    admin_incluida = bool(re.search(r"administraci[oó]n\s+incluida|incluye\s+administraci[oó]n", texto_pagina, re.IGNORECASE))
+
+    if match_admin:
+        admin_val = limpiar_monto(match_admin.group(1))
+        # Evitar falsos positivos si capturó el mismo canon como administración
+        if admin_val == canon_val:
+            admin_val = 0
+    else:
+        admin_val = 0
+
+    total_val = canon_val + admin_val
+
+    if canon_val > 0 and total_val > MAX_TOTAL:
+        print(f"Descartado por presupuesto ({formatear_pesos(total_val)} > {formatear_pesos(MAX_TOTAL)}): {link}")
+        return None
+
+    canon_fmt = formatear_pesos(canon_val) if canon_val > 0 else "Consultar"
+    if admin_incluida:
+        admin_fmt = "Incluida"
+        total_fmt = canon_fmt
+    elif admin_val > 0:
+        admin_fmt = formatear_pesos(admin_val)
+        total_fmt = formatear_pesos(total_val)
+    else:
+        admin_fmt = "No especificada"
+        total_fmt = canon_fmt
+
+    # 6. Parqueadero (Opcional)
+    match_parq = re.search(r"(\d+)\s?(?:parqueadero|garaje)", texto_pagina, re.IGNORECASE)
+    if match_parq:
+        parqueadero_fmt = f"Sí ({match_parq.group(1)})"
+    elif re.search(r"parqueadero|garaje", texto_pagina, re.IGNORECASE):
+        parqueadero_fmt = "Sí"
+    else:
+        parqueadero_fmt = "No especificado"
+
+    # 7. Título del inmueble
+    h1 = page.locator("h1").first
+    titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
+
+    return {
+        "portal": portal,
+        "titulo": titulo[:120],
+        "canon": canon_fmt,
+        "admin": admin_fmt,
+        "total": total_fmt,
+        "habitaciones": habs_fmt,
+        "tamano": tamano_fmt,
+        "parqueadero": parqueadero_fmt,
+        "fotos": total_fotos,
+        "link_maps": link_maps,
+        "link": link,
+    }
+
+
+def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
+    enlaces = []
+    page.goto(url_busqueda, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(4500)
+
+    anchors = page.locator("a[href*='/inmueble/'], a[href*='/apartamento'], a[href*='/casa']").all()
+    for a in anchors:
+        href = a.get_attribute("href")
         if not href:
             continue
-        link = f"https://www.fincaraiz.com.co{href}" if href.startswith("/") else href
-        prop_id = f"fr_{link.split('/')[-1]}"
-        texto = " | ".join([line.strip() for line in card.inner_text().splitlines() if line.strip()])
-        if texto:
-            resultados.append({"id": prop_id, "portal": "Fincaraíz", "info": texto[:220], "link": link})
-    return resultados
-
-
-def extraer_metrocuadrado(page):
-    resultados = []
-    page.goto(URL_METROCUADRADO, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(5000)
-
-    cards = page.locator("a[href*='/inmueble/']").all()
-    for card in cards[:15]:
-        href = card.get_attribute("href")
-        if not href:
-            continue
-        link = f"https://www.metrocuadrado.com{href}" if href.startswith("/") else href
-        prop_id = f"mc_{link.split('/')[-1]}"
-        texto = " | ".join([line.strip() for line in card.inner_text().splitlines() if line.strip()])
-        if texto:
-            resultados.append({"id": prop_id, "portal": "Metrocuadrado", "info": texto[:220], "link": link})
-    return resultados
+        link = f"{dominio}{href}" if href.startswith("/") else href
+        if re.search(r"[-/]\d{5,}", link):
+            slug = link.rstrip("/").split("/")[-1]
+            prop_id = f"{prefijo}_{slug}"
+            if prop_id not in [e[0] for e in enlaces]:
+                enlaces.append((prop_id, link))
+        if len(enlaces) >= 15:
+            break
+    return enlaces
 
 
 def main():
     vistos = cargar_vistos()
-    nuevos = []
+    nuevos_validos = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -97,31 +244,10 @@ def main():
         page = context.new_page()
         page.route("**/*", bloquear_recursos)
 
-        for extractor in [extraer_fincaraiz, extraer_metrocuadrado]:
+        portales = [
+            (URL_FINCARAIZ, "https://www.fincaraiz.com.co", "fr", "Fincaraíz"),
+            (URL_METROCUADRADO, "https://www.metrocuadrado.com", "mc", "Metrocuadrado"),
+        ]
+
+        for url_busq, dominio, prefijo, nombre_portal in portales:
             try:
-                items = extractor(page)
-                for item in items:
-                    if item["id"] not in vistos:
-                        vistos.add(item["id"])
-                        nuevos.append(item)
-            except Exception as e:
-                print(f"Error en extracción: {e}")
-            time.sleep(3)
-
-        browser.close()
-
-    for apto in nuevos:
-        msg = (
-            f"🏠 <b>Nuevo en {apto['portal']}</b>\n"
-            f"{apto['info']}\n\n"
-            f"🔗 <a href='{apto['link']}'>Ver publicación</a>"
-        )
-        enviar_telegram(msg)
-        time.sleep(1)
-
-    guardar_vistos(vistos)
-    print(f"Proceso finalizado. Nuevos encontrados: {len(nuevos)}")
-
-
-if __name__ == "__main__":
-    main()
