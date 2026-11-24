@@ -8,8 +8,8 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# URLs configuradas con tus filtros
-URL_FINCARAIZ = "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/2-o-mas-habitaciones/m2-desde-60/edificados/publicado-ultimos-7-dias"
+# URLs configuradas con tus filtros (Cundinamarca + precio en Fincaraíz para no perder bordes de Bogotá)
+URL_FINCARAIZ = "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/cundinamarca/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias"
 URL_METROCUADRADO = "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/2.7-millones--m2/?search=form"
 
 # Tus criterios de filtrado
@@ -88,9 +88,24 @@ def obtener_coordenadas(html):
     return None, None
 
 
+def contar_fotos_html(html):
+    # Busca URLs de fotos de inmuebles tanto en etiquetas <img> como en el JSON interno de la página
+    urls = re.findall(r'https?://[^"\'\s<>]+?\.(?:jpg|jpeg|webp)', html, re.IGNORECASE)
+    fotos_unicas = set()
+    for u in urls:
+        u_low = u.lower()
+        if any(bad in u_low for bad in ["logo", "icon", "banner", "avatar", "sprite", "favicon", "static"]):
+            continue
+        if any(cdn in u_low for cdn in ["fincaraiz", "metrocuadrado", "cloudfront", "amazonaws", "multimedia", "inmueble"]):
+            # Normaliza quitando parámetros de tamaño para no contar miniaturas duplicadas
+            base = u.split("?")[0].split("_")[0]
+            fotos_unicas.add(base)
+    return len(fotos_unicas)
+
+
 def extraer_datos_detalle(page, link, portal):
     page.goto(link, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(3500)
     html = page.content()
 
     # 1. Validar polígono geográfico
@@ -103,20 +118,8 @@ def extraer_datos_detalle(page, link, portal):
     else:
         link_maps = None
 
-    # 2. Validar cantidad mínima de fotos
-    total_fotos = page.evaluate("""() => {
-        const imgs = Array.from(document.querySelectorAll('img'));
-        const validas = new Set();
-        for (const img of imgs) {
-            const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
-            if (!src || src.startsWith('data:') || src.includes('logo') || src.includes('icon') || src.includes('svg')) continue;
-            if (src.includes('fincaraiz') || src.includes('metrocuadrado') || src.includes('cloudfront') || src.includes('amazonaws') || src.includes('cdn')) {
-                validas.add(src.split('?')[0]);
-            }
-        }
-        return validas.size;
-    }""")
-
+    # 2. Validar cantidad mínima de fotos (desde HTML/JSON)
+    total_fotos = contar_fotos_html(html)
     if total_fotos < MIN_FOTOS:
         print(f"Descartado por pocas fotos ({total_fotos}/{MIN_FOTOS}): {link}")
         return None
@@ -157,7 +160,6 @@ def extraer_datos_detalle(page, link, portal):
 
     if match_admin:
         admin_val = limpiar_monto(match_admin.group(1))
-        # Evitar falsos positivos si capturó el mismo canon como administración
         if admin_val == canon_val:
             admin_val = 0
     else:
@@ -211,7 +213,10 @@ def extraer_datos_detalle(page, link, portal):
 def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
     enlaces = []
     page.goto(url_busqueda, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(4500)
+    page.wait_for_timeout(5000)
+    # Hacemos un pequeño scroll para que carguen más tarjetas
+    page.mouse.wheel(0, 1500)
+    page.wait_for_timeout(2000)
 
     anchors = page.locator("a[href*='/inmueble/'], a[href*='/apartamento'], a[href*='/casa']").all()
     for a in anchors:
@@ -219,12 +224,14 @@ def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
         if not href:
             continue
         link = f"{dominio}{href}" if href.startswith("/") else href
-        if re.search(r"[-/]\d{5,}", link):
-            slug = link.rstrip("/").split("/")[-1]
+        # Limpiamos parámetros ?src_url=... en Metrocuadrado para que el ID sea único y limpio
+        link_limpio = link.split("?")[0]
+        if re.search(r"[-/]\d{5,}|[-/]M\d+", link_limpio):
+            slug = link_limpio.rstrip("/").split("/")[-1]
             prop_id = f"{prefijo}_{slug}"
             if prop_id not in [e[0] for e in enlaces]:
-                enlaces.append((prop_id, link))
-        if len(enlaces) >= 15:
+                enlaces.append((prop_id, link_limpio))
+        if len(enlaces) >= 25:
             break
     return enlaces
 
