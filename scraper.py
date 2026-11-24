@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# URLs configuradas con tus filtros exactos
+# URLs configuradas con tus filtros
 URL_FINCARAIZ = "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/bogota-y-en-usaquen-y-en-zona-norte/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4"
 URL_METROCUADRADO = "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/2.7-millones--m2/?search=form"
 
@@ -17,12 +17,12 @@ MAX_TOTAL = 2700000
 MIN_HABITACIONES = 2
 MIN_AREA_M2 = 59.0
 
-# Polígono de ubicación en orden perimetral
+# Polígono ampliado cubriendo las esquinas completas (incluye Cedritos, Polo Club, Alhambra, Colina, Chicó, Mazurén)
 POLIGONO_ZONA = [
-    (4.695482, -74.089036),  # Esquina superior izquierda
-    (4.663533, -74.046968),  # Esquina inferior izquierda
-    (4.723641, -74.026123),  # Esquina inferior derecha
-    (4.745853, -74.066108),  # Esquina superior derecha
+    (4.745853, -74.089036),  # Nor-Occidente (Suba / Av. Boyacá con Calle 165)
+    (4.663533, -74.089036),  # Sur-Occidente (Av. Boyacá con Calle 72)
+    (4.663533, -74.026123),  # Sur-Oriente (Carrera 7 con Calle 72)
+    (4.745853, -74.026123),  # Nor-Oriente (Carrera 7 con Calle 165)
 ]
 
 ARCHIVO_VISTOS = "vistos.json"
@@ -87,9 +87,41 @@ def obtener_coordenadas(html):
     return None, None
 
 
+def extraer_canon_y_admin(html, texto_principal):
+    # 1. Intentar leer el precio exacto desde el JSON estructurado del inmueble (evita confundir con valor m² o similares)
+    canon_val = 0
+    json_price = re.search(r'"price"\s*:\s*(\d{6,9})', html)
+    if json_price:
+        canon_val = int(json_price.group(1))
+
+    if canon_val == 0:
+        # Si no está en JSON, buscar montos en la parte superior de la ficha (primeros 2500 caracteres)
+        precios_top = re.findall(r"\$\s?([\d\.]{6,11})(?!\s*/\s*m)", texto_principal[:2500])
+        for p_str in precios_top:
+            val = limpiar_monto(p_str)
+            if 500000 <= val <= 15000000:
+                canon_val = val
+                break
+
+    # 2. Buscar administración
+    admin_val = 0
+    json_admin = re.search(r'"(?:administration|adminPrice|commonExpenses)"\s*:\s*(\d{4,8})', html)
+    if json_admin:
+        admin_val = int(json_admin.group(1))
+    else:
+        match_admin = re.search(r"administraci[oó]n[^\$\d]{0,25}\$\s?([\d\.]{4,9})", texto_principal[:3500], re.IGNORECASE)
+        if match_admin:
+            cand = limpiar_monto(match_admin.group(1))
+            if cand != canon_val and cand < canon_val:
+                admin_val = cand
+
+    admin_incluida = bool(re.search(r"administraci[oó]n\s+incluida|incluye\s+administraci[oó]n", texto_principal[:3500], re.IGNORECASE))
+    return canon_val, admin_val, admin_incluida
+
+
 def extraer_datos_detalle(page, link, portal):
     page.goto(link, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(3500)
+    page.wait_for_timeout(3000)
     html = page.content()
 
     # 1. Validar polígono geográfico
@@ -102,11 +134,14 @@ def extraer_datos_detalle(page, link, portal):
     else:
         link_maps = None
 
-    texto_pagina = page.inner_text("body")
+    # Tomamos solo la ficha principal (antes de "Inmuebles similares" o "Recomendados")
+    texto_completo = page.inner_text("body")
+    corte_similares = re.split(r"Inmuebles similares|Propiedades similares|También te puede interesar", texto_completo, maxsplit=1, flags=re.IGNORECASE)
+    texto_ficha = corte_similares[0]
 
     # 2. Validar Área privada / construida (>= 59 m²)
-    match_area_priv = re.search(r"[ÁA]rea\s+privada[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_pagina, re.IGNORECASE)
-    match_area_gen = re.search(r"(\d+(?:[.,]\d+)?)\s?m[²2]", texto_pagina, re.IGNORECASE)
+    match_area_priv = re.search(r"[ÁA]rea\s+privada[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_ficha, re.IGNORECASE)
+    match_area_gen = re.search(r"(\d+(?:[.,]\d+)?)\s?m[²2]", texto_ficha, re.IGNORECASE)
     area_str = match_area_priv.group(1) if match_area_priv else (match_area_gen.group(1) if match_area_gen else None)
 
     if area_str:
@@ -119,7 +154,7 @@ def extraer_datos_detalle(page, link, portal):
         tamano_fmt = "N/D"
 
     # 3. Validar Habitaciones (>= 2)
-    match_habs = re.search(r"(\d+)\s?(?:hab|habitaci|cuarto|alcoba)", texto_pagina, re.IGNORECASE)
+    match_habs = re.search(r"(\d+)\s?(?:hab|habitaci|cuarto|alcoba)", texto_ficha, re.IGNORECASE)
     if match_habs:
         num_habs = int(match_habs.group(1))
         if num_habs < MIN_HABITACIONES:
@@ -129,20 +164,8 @@ def extraer_datos_detalle(page, link, portal):
     else:
         habs_fmt = "N/D"
 
-    # 4. Extraer Canon y Administración por separado y validar presupuesto (<= 2.700.000)
-    precios_encontrados = re.findall(r"\$\s?[\d\.]{6,12}", texto_pagina)
-    canon_val = limpiar_monto(precios_encontrados[0]) if precios_encontrados else 0
-
-    match_admin = re.search(r"administraci[oó]n[^\$\d]{0,25}\$\s?([\d\.]{4,10})", texto_pagina, re.IGNORECASE)
-    admin_incluida = bool(re.search(r"administraci[oó]n\s+incluida|incluye\s+administraci[oó]n", texto_pagina, re.IGNORECASE))
-
-    if match_admin:
-        admin_val = limpiar_monto(match_admin.group(1))
-        if admin_val == canon_val:
-            admin_val = 0
-    else:
-        admin_val = 0
-
+    # 4. Validar Canon + Administración (<= 2.700.000)
+    canon_val, admin_val, admin_incluida = extraer_canon_y_admin(html, texto_ficha)
     total_val = canon_val + admin_val
 
     if canon_val > 0 and total_val > MAX_TOTAL:
@@ -160,16 +183,16 @@ def extraer_datos_detalle(page, link, portal):
         admin_fmt = "No especificada"
         total_fmt = canon_fmt
 
-    # 5. Parqueadero (Opcional)
-    match_parq = re.search(r"(\d+)\s?(?:parqueadero|garaje)", texto_pagina, re.IGNORECASE)
+    # 5. Parqueadero
+    match_parq = re.search(r"(\d+)\s?(?:parqueadero|garaje)", texto_ficha, re.IGNORECASE)
     if match_parq:
         parqueadero_fmt = f"Sí ({match_parq.group(1)})"
-    elif re.search(r"parqueadero|garaje", texto_pagina, re.IGNORECASE):
+    elif re.search(r"parqueadero|garaje", texto_ficha, re.IGNORECASE):
         parqueadero_fmt = "Sí"
     else:
         parqueadero_fmt = "No especificado"
 
-    # 6. Título del inmueble
+    # 6. Título
     h1 = page.locator("h1").first
     titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
 
@@ -190,9 +213,25 @@ def extraer_datos_detalle(page, link, portal):
 def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
     enlaces = []
     page.goto(url_busqueda, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(5000)
-    page.mouse.wheel(0, 1500)
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(4500)
+
+    # En Metrocuadrado, hacer clic en el desplegable de orden para seleccionar "Más reciente"
+    if prefijo == "mc":
+        try:
+            selector_orden = page.locator("text=Más relevante").first
+            if selector_orden.count() > 0:
+                selector_orden.click()
+                page.wait_for_timeout(1000)
+                page.locator("text=Más reciente").first.click()
+                page.wait_for_timeout(3500)
+                print("Metrocuadrado: Ordenado por 'Más reciente' correctamente.")
+        except Exception as e:
+            print(f"Metrocuadrado: No se pudo cambiar orden automático ({e})")
+
+    # Hacer 4 scrolls para cargar más tarjetas en pantalla
+    for _ in range(4):
+        page.mouse.wheel(0, 1800)
+        page.wait_for_timeout(1500)
 
     anchors = page.locator("a[href*='/inmueble/'], a[href*='/apartamento'], a[href*='/casa']").all()
     for a in anchors:
@@ -208,7 +247,7 @@ def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
             prop_id = f"{prefijo}_{slug}"
             if prop_id not in [e[0] for e in enlaces]:
                 enlaces.append((prop_id, link_limpio))
-        if len(enlaces) >= 25:
+        if len(enlaces) >= 35:
             break
     return enlaces
 
@@ -244,7 +283,7 @@ def main():
                     datos = extraer_datos_detalle(page, link, nombre_portal)
                     if datos:
                         nuevos_validos.append(datos)
-                    time.sleep(1.5)
+                    time.sleep(1.2)
             except Exception as e:
                 print(f"Error en {nombre_portal}: {e}")
 
