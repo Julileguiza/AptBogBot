@@ -8,8 +8,8 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
 # Pega aquí tus URLs con los filtros ya aplicados y ordenadas por "Más recientes"
-URL_FINCARAIZ = "TU_URL_DE_FINCARAIZ_AQUI"
-URL_METROCUADRADO = "TU_URL_DE_METROCUADRADO_AQUI"
+URL_FINCARAIZ = "https://www.fincaraiz.com.co/"
+URL_METROCUADRADO = "https://www.metrocuadrado.com/"
 
 ARCHIVO_VISTOS = "vistos.json"
 
