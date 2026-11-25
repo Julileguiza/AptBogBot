@@ -280,7 +280,18 @@ def extraer_canon_y_admin(html, texto_principal, next_data=None):
 def extraer_datos_detalle(page, link, portal):
     try:
         page.goto(link, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(3500)
+        # Espera inteligente: aguarda hasta 10s a que React renderice el signo $ y los datos técnicos
+        try:
+            page.wait_for_function(
+                "() => document.body && document.body.innerText.includes('$') && /hab|m²|m2/i.test(document.body.innerText)",
+                timeout=10000,
+            )
+        except Exception:
+            pass
+        # Pausa adicional de cortesía para que termine de hidratar mapa, admin y habitaciones
+        page.wait_for_timeout(2500)
+        page.mouse.wheel(0, 600)
+        page.wait_for_timeout(1000)
     except Exception as e:
         print(f"Timeout cargando ({portal}), se reintentará luego: {link} ({e})")
         return None, False
@@ -352,19 +363,37 @@ def extraer_datos_detalle(page, link, portal):
     else:
         tamano_fmt = "N/D"
 
-    # 4. Validar Habitaciones (>= 2)
-    match_habs = re.search(r"(\d+)\s?(?:hab|habitaci|cuarto|alcoba|dormitorio)", texto_ficha, re.IGNORECASE)
-    if not match_habs:
-        match_habs = re.search(r'"(?:rooms|bedrooms|habitaciones)"\s*:\s*(\d+)', html)
+    # 4. Validar Habitaciones (>= 2) revisando URL, __NEXT_DATA__, ficha y meta description
+    num_habs = None
 
-    if match_habs:
-        num_habs = int(match_habs.group(1))
+    m_url_habs = re.search(r"-(\d+)-habitaci", link, re.IGNORECASE)
+    if m_url_habs:
+        num_habs = int(m_url_habs.group(1))
+
+    if num_habs is None and next_data:
+        pares_habs = buscar_claves_json(next_data, {"rooms", "bedrooms", "habitaciones", "numRooms"})
+        for _, v in pares_habs:
+            try:
+                val_h = int(float(str(v)))
+                if 1 <= val_h <= 10:
+                    num_habs = val_h
+                    break
+            except ValueError:
+                pass
+
+    if num_habs is None:
+        m_texto_habs = re.search(r"(\d+)\s?(?:hab|habitaci|cuarto|alcoba|dormitorio)", f"{texto_ficha} {html[:4000]}", re.IGNORECASE)
+        if m_texto_habs:
+            num_habs = int(m_texto_habs.group(1))
+
+    if num_habs is not None:
         if num_habs < MIN_HABITACIONES:
             print(f"Descartado por menos de {MIN_HABITACIONES} habitaciones ({num_habs}): {link}")
             return None, True
         habs_fmt = str(num_habs)
     else:
-        habs_fmt = "N/D"
+        print(f"Descartado por no especificar número de habitaciones: {link}")
+        return None, True
 
     # 5. Validar Canon + Administración (hasta $2.800.000 extremo, sin descartar si falta admin)
     canon_val, admin_val, admin_incluida = extraer_canon_y_admin(html, texto_ficha, next_data)
@@ -464,11 +493,9 @@ def recolectar_metrocuadrado_api(page):
 
     page.on("request", capturar_cabeceras_api)
 
-    # Abrir una página base para inicializar sesión y capturar x-api-key si aplica
     page.goto("https://www.metrocuadrado.com/apartamento/arriendo/bogota/", wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(4000)
+    page.wait_for_timeout(4500)
 
-    # Consultar la API interna de búsqueda ordenada por más reciente (lote de 120 inmuebles)
     consultas_api = [
         "https://www.metrocuadrado.com/rest-search/search?realEstateBusinessList=arriendo&realEstateTypeList=apartamento&city=bogota&roomsList=2,3,4,5&areaFrom=59&rentPriceTo=2800000&orderBy=recent&sortField=publishedAt&sortType=desc&from=0&size=100",
         "https://www.metrocuadrado.com/rest-search/search?realEstateBusinessList=arriendo&realEstateTypeList=apartamento&city=bogota&zonesList=zona-norte,zona-noroccidente&roomsList=2,3,4,5&areaFrom=59&rentPriceTo=2800000&orderBy=recent&sortField=publishedAt&sortType=desc&from=0&size=80",
@@ -491,12 +518,11 @@ def recolectar_metrocuadrado_api(page):
 
     print(f"Metrocuadrado (API JSON): {len(encontrados)} candidatos obtenidos.")
 
-    # Respaldo automático si la API interna devolvió pocos resultados
     if len(encontrados) < 20:
         for url_resp in URLS_METROCUADRADO_RESPALDO:
             try:
                 page.goto(url_resp, wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(4000)
+                page.wait_for_timeout(4500)
                 for _ in range(5):
                     page.mouse.wheel(0, 2000)
                     page.wait_for_timeout(800)
@@ -541,7 +567,7 @@ def main():
                         vistos.add(prop_id)
                     if datos:
                         nuevos_validos.append(datos)
-                    time.sleep(0.7)
+                    time.sleep(0.8)
             except Exception as e:
                 print(f"Error en Fincaraíz: {e}")
 
@@ -556,7 +582,7 @@ def main():
                     vistos.add(prop_id)
                 if datos:
                     nuevos_validos.append(datos)
-                time.sleep(0.7)
+                time.sleep(0.8)
         except Exception as e:
             print(f"Error en Metrocuadrado: {e}")
 
