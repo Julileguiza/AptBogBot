@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -10,71 +11,58 @@ CHAT_ID = os.environ["CHAT_ID"]
 
 # 1. Fincaraíz (Páginas 1 y 2 en localidades de tu polígono)
 URLS_FINCARAIZ = [
-    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4",
-    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2700000/m2-desde-60/edificados/publicado-ultimos-7-dias/pagina2?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/edificados/publicado-ultimos-7-dias/pagina2?&IDmoneda=4",
 ]
 
-# 2. Metrocuadrado (Zona Norte, Noroccidente y General con paginación)
+# 2. Metrocuadrado (Zona Norte, Noroccidente y General)
 URLS_METROCUADRADO = [
-    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-norte/2-o-mas-habitaciones/hasta-2.7-millones/desde-60-m2/?search=form",
-    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-noroccidente/2-o-mas-habitaciones/hasta-2.7-millones/desde-60-m2/?search=form",
-    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/2.7-millones--m2/?search=form",
+    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-norte/2-o-mas-habitaciones/hasta-2.8-millones/desde-60-m2/?search=form",
+    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-noroccidente/2-o-mas-habitaciones/hasta-2.8-millones/desde-60-m2/?search=form",
+    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/2.8-millones--m2/?search=form",
 ]
 
-# 3. Mercado Libre Inmuebles (Por localidades exactas + Más recientes primero)
-URLS_MERCADOLIBRE = [
-    "https://listado.mercadolibre.com.co/inmuebles/apartamentos/arriendo/bogota-dc/suba/_OrderId_BEGINS*DESC_PriceRange_0COP-2700000COP_COVERED*AREA_60m%C2%B2-*",
-    "https://listado.mercadolibre.com.co/inmuebles/apartamentos/arriendo/bogota-dc/usaquen/_OrderId_BEGINS*DESC_PriceRange_0COP-2700000COP_COVERED*AREA_60m%C2%B2-*",
-    "https://listado.mercadolibre.com.co/inmuebles/apartamentos/arriendo/bogota-dc/barrios-unidos/_OrderId_BEGINS*DESC_PriceRange_0COP-2700000COP_COVERED*AREA_60m%C2%B2-*",
-    "https://listado.mercadolibre.com.co/inmuebles/apartamentos/arriendo/bogota-dc/chapinero/_OrderId_BEGINS*DESC_PriceRange_0COP-2700000COP_COVERED*AREA_60m%C2%B2-*",
-]
-
-# 4. Ciencuadras (Bogotá arriendo hasta $2.7M desde 60 m2)
-URLS_CIENCUADRAS = [
-    "https://www.ciencuadras.com/arriendo/bogota/apartamento/hasta-2700000/desde-60-m2",
-]
-
-# 5. Houm (Suba y Usaquén prefiltrados)
-URLS_HOUM = [
-    "https://houm.com/co/arriendo-apartamentos-bogota/suba/desde-2-dormitorios?maxRentalPriceTotal=2700000&minArea=60",
-    "https://houm.com/co/arriendo-apartamentos-bogota/usaquen/desde-2-dormitorios?maxRentalPriceTotal=2700000&minArea=60",
-]
-
-# Criterios de filtrado
-MIN_CANON_REAL = 1150000  # Bloquea confusiones con valor de administración
-MAX_TOTAL = 2700000
+# Criterios de filtrado y presupuesto
+MIN_CANON_REAL = 1150000
+PRESUPUESTO_OBJETIVO = 2700000
+MAX_TOTAL_EXTREMO = 2800000
 MIN_HABITACIONES = 2
 MIN_AREA_M2 = 59.0
+FECHA_CORTE = "2026-11-24"  # Solo notifica anuncios publicados desde hoy en adelante
 
-# Polígono de ubicación exacto
+# Nuevo polígono de ubicación exacto (ordenado en sentido horario)
 POLIGONO_ZONA = [
-    (4.745853, -74.089036),  # Nor-Occidente (Suba / Av. Boyacá con Calle 165)
-    (4.663533, -74.089036),  # Sur-Occidente (Av. Boyacá con Calle 72)
-    (4.663533, -74.026123),  # Sur-Oriente (Carrera 7 con Calle 72)
-    (4.745853, -74.026123),  # Nor-Oriente (Carrera 7 con Calle 165)
+    (4.746124, -74.069078),  # Superior Izquierda (Pinar / Colina / Av. Boyacá)
+    (4.728427, -74.021646),  # Superior Derecha (Bosques de Pinos / Calle 161)
+    (4.653406, -74.048914),  # Inferior Derecha (Avenida Chile / Calle 72)
+    (4.698282, -74.093596),  # Inferior Izquierda (Titán Plaza / Av. Boyacá con Calle 80)
 ]
 
-# Respaldo de barrios válidos dentro del polígono
+# Respaldo de barrios válidos dentro del polígono (se evalúa SOLO sobre URL y Título H1)
 BARRIOS_PERMITIDOS = [
     "cedritos", "cedro", "bella suiza", "bosques de pinos", "barrancas", "santa barbara",
     "usaquen", "contador", "lisboa", "caobos", "capri", "molinos", "chico", "antiguo country",
-    "cabrera", "colina campestre", "colina", "mazuren", "prado veraniego", "spring", "sotileza",
-    "niza", "puente largo", "pasadena", "alhambra", "batan", "malibu", "monaco", "santa rosa",
-    "morato", "pontevedra", "julio florez", "andes norte", "rionegro", "santa maria del lago",
-    "castellana", "polo club", "patria", "rincon del chico", "entre rios", "simon bolivar",
-    "metropolis", "modelo norte", "alcazares", "las ferias", "gilmar", "cantagallo", "victoria norte",
-    "verbenal", "toberin", "san cristobal norte", "santa teresa", "acacias", "las margaritas",
-    "iberia", "gratamira", "ciudad jardin norte", "san patricio", "navarra", "remanzo"
+    "cabrera", "colina campestre", "colina", "colinas de suba", "mazuren", "prado veraniego",
+    "spring", "sotileza", "niza", "puente largo", "pasadena", "alhambra", "batan", "malibu",
+    "monaco", "santa rosa", "morato", "pontevedra", "julio florez", "andes norte", "los andes",
+    "rionegro", "santa maria del lago", "castellana", "polo club", "patria", "rincon del chico",
+    "entre rios", "simon bolivar", "metropolis", "modelo norte", "alcazares", "las ferias",
+    "gilmar", "cantagallo", "victoria norte", "verbenal", "toberin", "san cristobal norte",
+    "santa teresa", "acacias", "las margaritas", "iberia", "gratamira", "ciudad jardin norte",
+    "san patricio", "navarra", "remanzo", "canaima", "mirandela", "villa del prado",
+    "nueva zelandia", "portales del norte", "britalia", "san jose del prado", "el plan",
+    "atenas", "santa helena", "quinta camacho", "porciuncula", "el lago", "espacios"
 ]
 
-# Barrios/localidades excluidos explícitamente
+# Barrios/localidades excluidos (se evalúa SOLO sobre URL y Título H1)
 BARRIOS_EXCLUIDOS = [
     "engativa", "el muelle", "fontibon", "bosa", "kennedy", "puente aranda", "subazar",
     "tibabuyes", "el poa", "la gaitana", "bilbao", "compartir", "rincon de suba", "auren",
     "villas de granada", "gran granada", "ciudad salitre", "salitre", "galerias", "teusaquillo",
     "la soledad", "chapinero alto", "chapinero central", "rosales", "pardo rubio", "marly",
     "centro internacional", "candelaria", "san cristobal sur", "usme", "tunjuelito", "rafael uribe",
-    "soacha", "mosquera", "funza", "chia", "cajica", "cota", "madrid"
+    "soacha", "mosquera", "funza", "chia", "cajica", "cota", "madrid", "veraguas", "castilla",
+    "la igualdad", "quesada", "normandia", "aeropuerto", "modelia", "hayuelos"
 ]
 
 ARCHIVO_VISTOS = "vistos.json"
@@ -163,6 +151,32 @@ def buscar_claves_json(obj, claves_objetivo):
     return resultados
 
 
+def es_publicacion_reciente(html, next_data=None):
+    """
+    Verifica si el inmueble fue publicado o actualizado desde FECHA_CORTE en adelante.
+    Si no se encuentra fecha explícita en el anuncio, lo deja pasar por seguridad.
+    """
+    fechas_encontradas = []
+    if next_data:
+        pares_fecha = buscar_claves_json(
+            next_data,
+            {"createdAt", "updatedAt", "publicationDate", "publishedAt", "dateCreated", "modificationDate"},
+        )
+        for _, v in pares_fecha:
+            m = re.search(r"(202\d-\d{2}-\d{2})", str(v))
+            if m:
+                fechas_encontradas.append(m.group(1))
+
+    if not fechas_encontradas:
+        for m in re.finditer(r'"(?:createdAt|updatedAt|publicationDate|publishedAt|dateCreated)"\s*:\s*"(202\d-\d{2}-\d{2})', html):
+            fechas_encontradas.append(m.group(1))
+
+    if fechas_encontradas:
+        fecha_mas_reciente = max(fechas_encontradas)
+        return fecha_mas_reciente >= FECHA_CORTE, fecha_mas_reciente
+    return True, "N/D"
+
+
 def obtener_coordenadas(html, next_data=None):
     if next_data:
         coords = dict(buscar_claves_json(next_data, {"lat", "lon", "lng", "latitude", "longitude"}))
@@ -189,7 +203,6 @@ def extraer_canon_y_admin(html, texto_principal, next_data=None):
     canon_val = 0
     admin_val = 0
 
-    # 1. Si hay __NEXT_DATA__ (Metrocuadrado, Fincaraíz, Houm), separar explícitamente canon vs administración
     if next_data:
         pares = buscar_claves_json(
             next_data,
@@ -216,7 +229,6 @@ def extraer_canon_y_admin(html, texto_principal, next_data=None):
         if admins_candidatos:
             admin_val = admins_candidatos[0]
 
-    # 2. Respaldo regex JSON si no hubo __NEXT_DATA__
     if canon_val == 0:
         for m in re.finditer(r'"(?:rentalPrice|canon|rentPrice|price|value)"\s*:\s*(\d{7,9})', html):
             cand = int(m.group(1))
@@ -224,7 +236,6 @@ def extraer_canon_y_admin(html, texto_principal, next_data=None):
                 canon_val = cand
                 break
 
-    # 3. Respaldo texto visible (solo montos >= $1.150.000)
     if canon_val == 0:
         precios_top = re.findall(r"\$\s?([\d\.]{7,11})(?!\s*/\s*m)", texto_principal[:3200])
         for p_str in precios_top:
@@ -233,7 +244,6 @@ def extraer_canon_y_admin(html, texto_principal, next_data=None):
                 canon_val = val
                 break
 
-    # 4. Respaldo administración en JSON o texto
     if admin_val == 0:
         json_admin = re.search(r'"(?:administration|adminPrice|commonExpenses|administrationPrice)"\s*:\s*(\d{4,8})', html)
         if json_admin:
@@ -253,12 +263,6 @@ def extraer_canon_y_admin(html, texto_principal, next_data=None):
 
 
 def extraer_datos_detalle(page, link, portal):
-    """
-    Retorna:
-      (dict_datos, True)  -> Válido, enviar y marcar en vistos
-      (None, True)        -> Descartado con certeza por filtro, marcar en vistos para no repetir
-      (None, False)       -> Error temporal de carga, NO marcar en vistos para reintentar luego
-    """
     try:
         page.goto(link, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3500)
@@ -268,6 +272,12 @@ def extraer_datos_detalle(page, link, portal):
 
     html = page.content()
     next_data = extraer_next_data(html)
+
+    # 0. Verificar fecha de publicación (>= 2026-11-24 para no reenviar historial antiguo)
+    es_reciente, fecha_pub = es_publicacion_reciente(html, next_data)
+    if not es_reciente:
+        print(f"Silenciado por fecha anterior a {FECHA_CORTE} ({fecha_pub}): {link}")
+        return None, True
 
     h1 = page.locator("h1").first
     titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
@@ -284,7 +294,7 @@ def extraer_datos_detalle(page, link, portal):
         flags=re.IGNORECASE,
     )
     texto_ficha = corte_similares[0]
-    texto_ubicacion_norm = normalizar_texto(f"{link} {titulo} {texto_ficha[:1500]}")
+    texto_ubicacion_norm = normalizar_texto(f"{link} {titulo}")
 
     # 1. Descartar barrios o municipios excluidos
     if any(b_exc in texto_ubicacion_norm for b_exc in BARRIOS_EXCLUIDOS):
@@ -304,13 +314,22 @@ def extraer_datos_detalle(page, link, portal):
             return None, True
         link_maps = None
 
-    # 3. Validar Área privada / construida (>= 59 m²)
+    # 3. Validar Área privada / construida (>= 59 m² tomando el mayor metraje para no confundir garaje)
     match_area_priv = re.search(r"[ÁA]rea\s+privada[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_ficha, re.IGNORECASE)
-    match_area_gen = re.search(r"(\d+(?:[.,]\d+)?)\s?m[²2]", texto_ficha, re.IGNORECASE)
-    area_str = match_area_priv.group(1) if match_area_priv else (match_area_gen.group(1) if match_area_gen else None)
-
-    if area_str:
+    if match_area_priv:
+        area_str = match_area_priv.group(1)
         area_val = float(area_str.replace(",", "."))
+    else:
+        areas_encontradas = [float(a.replace(",", ".")) for a in re.findall(r"(\d+(?:[.,]\d+)?)\s?m[²2]", texto_ficha[:3000], re.IGNORECASE)]
+        areas_validas_rango = [a for a in areas_encontradas if 25.0 <= a <= 400.0]
+        if areas_validas_rango:
+            area_val = max(areas_validas_rango)
+            area_str = f"{area_val:g}"
+        else:
+            area_val = None
+            area_str = None
+
+    if area_val is not None:
         if area_val < MIN_AREA_M2:
             print(f"Descartado por área menor a {MIN_AREA_M2} m² ({area_val}): {link}")
             return None, True
@@ -332,7 +351,7 @@ def extraer_datos_detalle(page, link, portal):
     else:
         habs_fmt = "N/D"
 
-    # 5. Validar Canon + Administración (<= 2.700.000)
+    # 5. Validar Canon + Administración (hasta $2.800.000 extremo, sin descartar si falta admin)
     canon_val, admin_val, admin_incluida = extraer_canon_y_admin(html, texto_ficha, next_data)
 
     if canon_val == 0:
@@ -340,12 +359,16 @@ def extraer_datos_detalle(page, link, portal):
         return None, False
 
     total_val = canon_val + admin_val
-    if total_val > MAX_TOTAL:
-        print(f"Descartado por presupuesto ({formatear_pesos(total_val)} > {formatear_pesos(MAX_TOTAL)}): {link}")
+    if total_val > MAX_TOTAL_EXTREMO:
+        print(f"Descartado por presupuesto ({formatear_pesos(total_val)} > {formatear_pesos(MAX_TOTAL_EXTREMO)}): {link}")
         return None, True
 
+    advertencias = []
+    if total_val > PRESUPUESTO_OBJETIVO:
+        advertencias.append("⚠️ <b>PRESUPUESTO EXTREMO (&gt; $2.7M): Evaluar negociación</b>")
+
     canon_fmt = formatear_pesos(canon_val)
-    if admin_incluida or portal == "Houm":
+    if admin_incluida:
         admin_fmt = "Incluida"
         total_fmt = canon_fmt
     elif admin_val > 0:
@@ -353,7 +376,8 @@ def extraer_datos_detalle(page, link, portal):
         total_fmt = formatear_pesos(total_val)
     else:
         admin_fmt = "No especificada"
-        total_fmt = canon_fmt
+        total_fmt = f"{canon_fmt} (+ admin por confirmar)"
+        advertencias.append("⚠️ <b>Admin no especificada: verificar si está incluida</b>")
 
     # 6. Parqueadero
     match_parq = re.search(r"(\d+)\s?(?:parqueadero|garaje|estacionamiento)", texto_ficha, re.IGNORECASE)
@@ -373,6 +397,7 @@ def extraer_datos_detalle(page, link, portal):
         "habitaciones": habs_fmt,
         "tamano": tamano_fmt,
         "parqueadero": parqueadero_fmt,
+        "advertencias": advertencias,
         "link_maps": link_maps,
         "link": link,
     }, True
@@ -381,7 +406,7 @@ def extraer_datos_detalle(page, link, portal):
 def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
     enlaces = []
     page.goto(url_busqueda, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(4500)
+    page.wait_for_timeout(5000)
 
     if prefijo == "mc":
         try:
@@ -414,18 +439,9 @@ def recolectar_enlaces(page, url_busqueda, dominio, prefijo):
             es_valido = True
         elif prefijo == "mc" and re.search(r"/inmueble/[^/]+/\d+-M\d+$", link_limpio):
             es_valido = True
-        elif prefijo == "ml" and re.search(r"/MCO-\d+", link_limpio):
-            es_valido = True
-        elif prefijo == "cc" and re.search(r"/inmueble/[^/]+/\d+$", link_limpio):
-            es_valido = True
-        elif prefijo == "hm" and re.search(r"/co/arriendo-apartamento-[^/]+/\d+$", link_limpio):
-            es_valido = True
 
         if es_valido:
             slug = link_limpio.rstrip("/").split("/")[-1]
-            if prefijo == "ml":
-                m_mco = re.search(r"(MCO-\d+)", link_limpio)
-                slug = m_mco.group(1) if m_mco else slug
             prop_id = f"{prefijo}_{slug}"
             if prop_id not in [e[0] for e in enlaces]:
                 enlaces.append((prop_id, link_limpio))
@@ -455,13 +471,6 @@ def main():
             (URLS_METROCUADRADO[0], "https://www.metrocuadrado.com", "mc", "Metrocuadrado"),
             (URLS_METROCUADRADO[1], "https://www.metrocuadrado.com", "mc", "Metrocuadrado"),
             (URLS_METROCUADRADO[2], "https://www.metrocuadrado.com", "mc", "Metrocuadrado"),
-            (URLS_MERCADOLIBRE[0], "https://apartamento.mercadolibre.com.co", "ml", "Mercado Libre"),
-            (URLS_MERCADOLIBRE[1], "https://apartamento.mercadolibre.com.co", "ml", "Mercado Libre"),
-            (URLS_MERCADOLIBRE[2], "https://apartamento.mercadolibre.com.co", "ml", "Mercado Libre"),
-            (URLS_MERCADOLIBRE[3], "https://apartamento.mercadolibre.com.co", "ml", "Mercado Libre"),
-            (URLS_CIENCUADRAS[0], "https://www.ciencuadras.com", "cc", "Ciencuadras"),
-            (URLS_HOUM[0], "https://houm.com", "hm", "Houm"),
-            (URLS_HOUM[1], "https://houm.com", "hm", "Houm"),
         ]
 
         for url_busq, dominio, prefijo, nombre_portal in busquedas:
@@ -483,6 +492,7 @@ def main():
         browser.close()
 
     for apto in nuevos_validos:
+        bloque_advertencias = ("\n".join(apto["advertencias"]) + "\n") if apto["advertencias"] else ""
         linea_maps = (
             f"📍 <b>Ubicación:</b> <a href='{apto['link_maps']}'>Ver en Google Maps</a>\n"
             if apto["link_maps"]
@@ -490,6 +500,7 @@ def main():
         )
         msg = (
             f"🏢 <b>Apartamento ({apto['portal']}):</b> {apto['titulo']}\n"
+            f"{bloque_advertencias}"
             f"💰 <b>Canon:</b> {apto['canon']}\n"
             f"🧾 <b>Administración:</b> {apto['admin']}\n"
             f"💵 <b>Total estimado:</b> {apto['total']}\n"
