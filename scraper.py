@@ -9,17 +9,18 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# 1. Fincaraíz (Páginas 1 y 2 en localidades de tu polígono)
+# 1. Fincaraíz: Prioriza 'publicado-ayer' (últimas 48 horas: ayer y hoy) + respaldo por localidades
 URLS_FINCARAIZ = [
+    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/publicado-ayer?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/publicado-ayer/pagina2?&IDmoneda=4",
     "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4",
-    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/edificados/publicado-ultimos-7-dias/pagina2?&IDmoneda=4",
 ]
 
-# 2. Metrocuadrado (Respaldo web si la API interna cambia parámetros)
-URLS_METROCUADRADO_RESPALDO = [
+# 2. Metrocuadrado (Búsquedas prefiltradas por habitaciones, precio y área)
+URLS_METROCUADRADO = [
+    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-norte/2-o-mas-habitaciones/hasta-2.8-millones/desde-60-m2/?search=form",
+    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-noroccidente/2-o-mas-habitaciones/hasta-2.8-millones/desde-60-m2/?search=form",
     "https://www.metrocuadrado.com/apartamento/arriendo/bogota/2.8-millones--m2/?search=form",
-    "https://www.metrocuadrado.com/apartamento/arriendo/bogota/zona-norte/2.8-millones--m2/?search=form",
-    "https://www.metrocuadrado.com/apartamento/arriendo/bogota/zona-noroccidente/2.8-millones--m2/?search=form",
 ]
 
 # Criterios de filtrado y presupuesto
@@ -28,30 +29,32 @@ PRESUPUESTO_OBJETIVO = 2700000
 MAX_TOTAL_EXTREMO = 2800000
 MIN_HABITACIONES = 2
 MIN_AREA_M2 = 59.0
-FECHA_CORTE = "2026-11-24"  # Silencia historial anterior a esta fecha
+FECHA_CORTE = "2026-11-24"  # Permite anuncios de ayer (24) y hoy (25) en adelante
 
-# Polígono de ubicación exacto (ordenado en sentido horario)
+# Polígono de ubicación exacto (incluye Colina/Portales del Monte, Calle 153 y Bella Suiza/Sta. Bárbara)
 POLIGONO_ZONA = [
-    (4.746124, -74.069078),  # Superior Izquierda (Pinar / Colina / Av. Boyacá)
-    (4.728427, -74.021646),  # Superior Derecha (Bosques de Pinos / Calle 161)
-    (4.653406, -74.048914),  # Inferior Derecha (Avenida Chile / Calle 72)
+    (4.750000, -74.069078),  # Superior Izquierda (Pinar / Colina Campestre / Portales del Monte)
+    (4.742000, -74.021646),  # Superior Derecha (Bosques de Pinos / Calle 161 con Cra. 7)
+    (4.653406, -74.038000),  # Inferior Derecha (Avenida Chile / Carrera 7 con Calle 72)
     (4.698282, -74.093596),  # Inferior Izquierda (Titán Plaza / Av. Boyacá con Calle 80)
 ]
 
 # Respaldo de barrios válidos dentro del polígono (se evalúa SOLO sobre URL y Título H1)
 BARRIOS_PERMITIDOS = [
-    "cedritos", "cedro", "bella suiza", "bosques de pinos", "barrancas", "santa barbara",
-    "usaquen", "contador", "lisboa", "caobos", "capri", "molinos", "chico", "antiguo country",
-    "cabrera", "colina campestre", "colina", "colinas de suba", "mazuren", "prado veraniego",
-    "spring", "sotileza", "niza", "puente largo", "pasadena", "alhambra", "batan", "malibu",
-    "monaco", "santa rosa", "morato", "pontevedra", "julio florez", "andes norte", "los andes",
-    "rionegro", "santa maria del lago", "castellana", "polo club", "patria", "rincon del chico",
-    "entre rios", "simon bolivar", "metropolis", "modelo norte", "alcazares", "las ferias",
-    "gilmar", "cantagallo", "victoria norte", "verbenal", "toberin", "san cristobal norte",
-    "santa teresa", "acacias", "las margaritas", "iberia", "gratamira", "ciudad jardin norte",
-    "san patricio", "navarra", "remanzo", "canaima", "mirandela", "villa del prado",
-    "nueva zelandia", "portales del norte", "britalia", "san jose del prado", "el plan",
-    "atenas", "santa helena", "quinta camacho", "porciuncula", "el lago"
+    "cedritos", "cedro", "cedro golf", "bella suiza", "bosques de pinos", "barrancas",
+    "santa barbara", "usaquen", "contador", "lisboa", "caobos", "capri", "molinos",
+    "chico", "antiguo country", "cabrera", "colina campestre", "colina", "colinas de suba",
+    "mazuren", "prado veraniego", "spring", "sotileza", "niza", "puente largo", "pasadena",
+    "alhambra", "batan", "malibu", "monaco", "santa rosa", "morato", "pontevedra",
+    "julio florez", "andes norte", "los andes", "rionegro", "santa maria del lago",
+    "castellana", "polo club", "patria", "rincon del chico", "entre rios", "simon bolivar",
+    "metropolis", "modelo norte", "alcazares", "las ferias", "gilmar", "cantagallo",
+    "victoria norte", "verbenal", "toberin", "san cristobal norte", "santa teresa",
+    "acacias", "las margaritas", "las orquideas", "del monte", "portales del monte",
+    "la calleja", "iberia", "gratamira", "ciudad jardin norte", "san patricio", "navarra",
+    "remanzo", "canaima", "mirandela", "villa del prado", "nueva zelandia",
+    "portales del norte", "britalia", "san jose del prado", "el plan", "atenas",
+    "santa helena", "quinta camacho", "porciuncula", "el lago", "153"
 ]
 
 # Barrios/localidades excluidos (se evalúa SOLO sobre URL y Título H1)
@@ -151,23 +154,14 @@ def buscar_claves_json(obj, claves_objetivo):
     return resultados
 
 
-def extraer_enlaces_mc_de_json(obj, encontrados):
-    """Extrae recursivamente cualquier ruta /inmueble/.../XXXX-MXXXX dentro de respuestas JSON de Metrocuadrado."""
-    if isinstance(obj, dict):
-        for v in obj.values():
-            extraer_enlaces_mc_de_json(v, encontrados)
-    elif isinstance(obj, list):
-        for item in obj:
-            extraer_enlaces_mc_de_json(item, encontrados)
-    elif isinstance(obj, str):
-        m = re.search(r"(/inmueble/[^/\"'\s\?]+/\d+-M\d+)", obj)
-        if m:
-            ruta = m.group(1)
-            link_limpio = f"https://www.metrocuadrado.com{ruta}"
-            slug = ruta.rstrip("/").split("/")[-1]
-            prop_id = f"mc_{slug}"
-            if prop_id not in encontrados:
-                encontrados[prop_id] = link_limpio
+def extraer_enlaces_mc_de_texto(texto, encontrados):
+    for m in re.finditer(r"(/inmueble/[^/\"'\s\?]+/\d+-M\d+)", texto):
+        ruta = m.group(1)
+        link_limpio = f"https://www.metrocuadrado.com{ruta}"
+        slug = ruta.rstrip("/").split("/")[-1]
+        prop_id = f"mc_{slug}"
+        if prop_id not in encontrados:
+            encontrados[prop_id] = link_limpio
 
 
 def es_publicacion_reciente(html, next_data=None):
@@ -280,7 +274,6 @@ def extraer_canon_y_admin(html, texto_principal, next_data=None):
 def extraer_datos_detalle(page, link, portal):
     try:
         page.goto(link, wait_until="domcontentloaded", timeout=60000)
-        # Espera inteligente: aguarda hasta 10s a que React renderice el signo $ y los datos técnicos
         try:
             page.wait_for_function(
                 "() => document.body && document.body.innerText.includes('$') && /hab|m²|m2/i.test(document.body.innerText)",
@@ -288,7 +281,6 @@ def extraer_datos_detalle(page, link, portal):
             )
         except Exception:
             pass
-        # Pausa adicional de cortesía para que termine de hidratar mapa, admin y habitaciones
         page.wait_for_timeout(2500)
         page.mouse.wheel(0, 600)
         page.wait_for_timeout(1000)
@@ -477,65 +469,35 @@ def recolectar_fincaraiz(page, url_busqueda):
     return enlaces
 
 
-def recolectar_metrocuadrado_api(page):
-    """
-    Consulta directamente la API JSON interna de búsqueda de Metrocuadrado dentro de la sesión
-    del navegador (ordenada por más reciente, sin hacer clics en botones/menús), con respaldo DOM.
-    """
+def recolectar_metrocuadrado(page):
     encontrados = {}
-    api_headers = {"accept": "application/json"}
 
-    def capturar_cabeceras_api(request):
-        if "rest-search/search" in request.url:
-            for k, v in request.headers.items():
-                if k.lower() in {"x-api-key", "authorization", "accept"}:
-                    api_headers[k] = v
-
-    page.on("request", capturar_cabeceras_api)
-
-    page.goto("https://www.metrocuadrado.com/apartamento/arriendo/bogota/", wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(4500)
-
-    consultas_api = [
-        "https://www.metrocuadrado.com/rest-search/search?realEstateBusinessList=arriendo&realEstateTypeList=apartamento&city=bogota&roomsList=2,3,4,5&areaFrom=59&rentPriceTo=2800000&orderBy=recent&sortField=publishedAt&sortType=desc&from=0&size=100",
-        "https://www.metrocuadrado.com/rest-search/search?realEstateBusinessList=arriendo&realEstateTypeList=apartamento&city=bogota&zonesList=zona-norte,zona-noroccidente&roomsList=2,3,4,5&areaFrom=59&rentPriceTo=2800000&orderBy=recent&sortField=publishedAt&sortType=desc&from=0&size=80",
-    ]
-
-    for url_api in consultas_api:
+    def interceptar_respuesta(response):
         try:
-            data_json = page.evaluate(
-                """async ({url, headers}) => {
-                    const res = await fetch(url, { headers });
-                    if (!res.ok) return null;
-                    return await res.json();
-                }""",
-                {"url": url_api, "headers": api_headers},
-            )
-            if data_json:
-                extraer_enlaces_mc_de_json(data_json, encontrados)
+            if "metrocuadrado.com" in response.url and response.status == 200:
+                ct = response.headers.get("content-type", "")
+                if "json" in ct or "text" in ct:
+                    cuerpo = response.text()
+                    if "/inmueble/" in cuerpo:
+                        extraer_enlaces_mc_de_texto(cuerpo, encontrados)
+        except Exception:
+            pass
+
+    page.on("response", interceptar_respuesta)
+
+    for url_mc in URLS_METROCUADRADO:
+        try:
+            page.goto(url_mc, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(4500)
+            for _ in range(5):
+                page.mouse.wheel(0, 2000)
+                page.wait_for_timeout(800)
+            extraer_enlaces_mc_de_texto(page.content(), encontrados)
         except Exception as e:
-            print(f"Aviso API interna Metrocuadrado: {e}")
+            print(f"Aviso navegando Metrocuadrado: {e}")
 
-    print(f"Metrocuadrado (API JSON): {len(encontrados)} candidatos obtenidos.")
-
-    if len(encontrados) < 20:
-        for url_resp in URLS_METROCUADRADO_RESPALDO:
-            try:
-                page.goto(url_resp, wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(4500)
-                for _ in range(5):
-                    page.mouse.wheel(0, 2000)
-                    page.wait_for_timeout(800)
-                html = page.content()
-                extraer_enlaces_mc_de_json(html, encontrados)
-                for a in page.locator("a[href*='/inmueble/']").all():
-                    href = a.get_attribute("href")
-                    if href:
-                        extraer_enlaces_mc_de_json(href, encontrados)
-            except Exception:
-                pass
-        print(f"Metrocuadrado (total con respaldo): {len(encontrados)} candidatos.")
-
+    page.remove_listener("response", interceptar_respuesta)
+    print(f"Metrocuadrado: {len(encontrados)} candidatos únicos recolectados.")
     return list(encontrados.items())
 
 
@@ -554,7 +516,7 @@ def main():
         page = context.new_page()
         page.route("**/*", bloquear_recursos)
 
-        # 1. Fincaraíz (Páginas 1 y 2)
+        # 1. Fincaraíz (publicado-ayer págs 1-2 + respaldo últimos 7 días en localidades)
         for url_fr in URLS_FINCARAIZ:
             try:
                 candidatos_fr = recolectar_fincaraiz(page, url_fr)
@@ -571,9 +533,9 @@ def main():
             except Exception as e:
                 print(f"Error en Fincaraíz: {e}")
 
-        # 2. Metrocuadrado (API JSON directa + respaldo)
+        # 2. Metrocuadrado
         try:
-            candidatos_mc = recolectar_metrocuadrado_api(page)
+            candidatos_mc = recolectar_metrocuadrado(page)
             for prop_id, link in candidatos_mc:
                 if prop_id in vistos:
                     continue
@@ -588,7 +550,6 @@ def main():
 
         browser.close()
 
-    # Envía notificaciones únicamente si hay apartamentos nuevos válidos
     for apto in nuevos_validos:
         bloque_advertencias = ("\n".join(apto["advertencias"]) + "\n") if apto["advertencias"] else ""
         linea_maps = (
