@@ -6,8 +6,8 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-CHAT_ID = os.environ["CHAT_ID"]
+TELEGRAM_TOKEN = os.environ["9273646103:AAHuszfL591VdsLo8CU_HWl8hr5NFUcyBdo"]
+CHAT_ID = os.environ["9287215182"]
 
 # Búsqueda en Fincaraíz: SOLO apartamentos en localidades del norte/noroccidente (HOY y AYER)
 URLS_FINCARAIZ = [
