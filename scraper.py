@@ -25,36 +25,33 @@ MIN_CANON_REAL = 1000000
 MIN_AREA_M2 = 58.0
 MIN_HABITACIONES = 2
 
-# Barrios permitidos derivados del polígono (se evalúa contra "Ubicaciones asociadas")
+# Barrios estrictamente dentro del polígono rojo (sin nombres genéricos de país/localidad)
 BARRIOS_PERMITIDOS = [
-    "cedritos", "cedro", "cedro golf", "cedro bolivar", "los cedros", "bella suiza",
-    "bosques de pinos", "barrancas", "barrancas norte", "santa barbara",
-    "santa barbara central", "santa barbara occidental", "santa barbara alta",
-    "santa ana", "contador", "el contador", "lisboa", "caobos", "caobos salazar",
-    "capri", "molinos", "molinos norte", "chico", "chico norte", "chico reservado",
-    "rincon del chico", "antiguo country", "cabrera", "la cabrera", "el retiro",
-    "el nogal", "san patricio", "navarra", "santa bibiana", "la calleja",
-    "country club", "el country", "unicentro", "multicentro", "la carolina",
-    "carolina", "santa paula", "colina campestre", "colina", "colinas de suba",
-    "pinar de suba", "el pinar", "portales del monte", "del monte", "mazuren",
-    "parques de mazuren", "prado veraniego", "prado pinzon", "alcala",
+    # Suba Oriental (al sur de Colina/153 y oriente de Av. Boyacá / Titán Plaza)
+    "colina campestre", "la colina", "gratamira", "iberia", "ciudad jardin norte",
+    "covadonga", "mazuren", "prado veraniego", "prado pinzon", "alcala",
     "nueva autopista", "tierra linda", "spring", "sotileza", "niza", "niza norte",
-    "niza suba", "niza antigua", "puente largo", "pasadena", "alhambra", "batan",
-    "el batan", "malibu", "monaco", "provenza", "santa rosa", "morato", "pontevedra",
-    "potosi", "julio florez", "andes norte", "los andes", "rionegro",
-    "santa maria del lago", "castellana", "la castellana", "polo club", "el polo",
-    "patria", "la patria", "entre rios", "simon bolivar", "metropolis",
-    "modelo norte", "alcazares", "los alcazares", "san fernando", "siete de agosto",
-    "colombia", "quinta camacho", "porciuncula", "el lago", "lago gaitan",
-    "la esperanza", "las ferias", "estrada", "la estrada", "bonanza", "titan",
-    "minuto de dios", "gilmar", "cantagallo", "victoria norte", "santandersito",
-    "verbenal", "toberin", "estrella del norte", "la uribe", "san cristobal norte",
-    "santa teresa", "acacias", "las margaritas", "las orquideas", "iberia",
-    "gratamira", "ciudad jardin norte", "covadonga", "remanzo", "canaima",
-    "mirandela", "villa del prado", "nueva zelandia", "portales del norte",
-    "britalia", "san jose del prado", "el plan", "atenas", "santa helena",
-    "villa magdala", "icata", "san jose de bavaria", "la floresta", "floresta",
-    "cafam floresta"
+    "niza suba", "niza antigua", "puente largo", "pasadena", "alhambra",
+    "la alhambra", "batan", "el batan", "malibu", "monaco", "provenza",
+    "santa rosa", "morato", "pontevedra", "potosi", "julio florez", "andes norte",
+    "los andes", "rionegro", "la floresta", "floresta", "cafam floresta",
+    "santa maria del lago",
+    # Usaquén (entre Autopista Norte y Carrera 7, desde Bosques de Pinos hasta Calle 100)
+    "bosques de pinos", "barrancas", "barrancas norte", "cedritos", "los cedros",
+    "cedro", "cedro golf", "cedro bolivar", "cedro salazar", "acacias",
+    "las acacias", "las margaritas", "caobos", "caobos salazar", "capri",
+    "contador", "el contador", "bella suiza", "ginebra", "hacienda santa barbara",
+    "santa ana", "santa ana occidental", "santa ana oriental", "santa barbara",
+    "santa barbara central", "santa barbara occidental", "santa barbara alta",
+    "santa barbara oriental", "unicentro", "multicentro", "la carolina",
+    "country club", "el country", "la calleja", "navarra", "san patricio",
+    "santa bibiana", "molinos", "molinos norte", "santa paula",
+    # Chapinero Norte y Barrios Unidos Norte (Calle 100 hasta Calle 72 / Avenida Chile)
+    "chico", "chico norte", "chico reservado", "el chico", "rincon del chico",
+    "antiguo country", "el retiro", "el nogal", "la cabrera", "cabrera",
+    "parque el virrey", "el virrey", "andino", "el lago", "lago gaitan",
+    "porciuncula", "avenida chile", "la castellana", "castellana", "polo club",
+    "el polo", "patria", "la patria", "entre rios", "concepcion norte",
 ]
 
 ARCHIVO_VISTOS = "vistos.json"
@@ -135,7 +132,6 @@ def extraer_ubicaciones_asociadas(page, next_data):
     """Extrae los elementos del campo 'Ubicaciones asociadas' del aviso."""
     ubicaciones = []
 
-    # 1. Lectura directa desde el bloque DOM "Ubicaciones asociadas"
     try:
         items_dom = page.evaluate(
             """() => {
@@ -161,7 +157,6 @@ def extraer_ubicaciones_asociadas(page, next_data):
     except Exception:
         pass
 
-    # 2. Respaldo desde el árbol de ubicaciones en __NEXT_DATA__
     if next_data:
         def recorrer_ubicaciones(obj):
             if isinstance(obj, dict):
@@ -265,14 +260,12 @@ def extraer_precio(html, texto_ficha, next_data):
 
 def extraer_area(texto_ficha, next_data):
     """Prioridad 1: Área Privada. Prioridad 2: Área (construida) solo si no trae Área Privada."""
-    # 1. Área Privada en ficha visible
     m_priv = re.search(r"[ÁA]rea\s+privada[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_ficha, re.IGNORECASE)
     if m_priv:
         val = float(m_priv.group(1).replace(",", "."))
         if val > 0:
             return val, m_priv.group(1).replace(",", ".")
 
-    # 2. Área Privada en __NEXT_DATA__
     if next_data:
         for _, v in buscar_claves_json(next_data, {"privateArea", "areaPrivada", "private_area"}):
             try:
@@ -282,7 +275,6 @@ def extraer_area(texto_ficha, next_data):
             except ValueError:
                 pass
 
-    # 3. Respaldo: Área construida / Área general en ficha visible
     m_const = re.search(r"[ÁA]rea(?:\s+construida|\s+total)?[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_ficha, re.IGNORECASE)
     if m_const:
         val = float(m_const.group(1).replace(",", "."))
@@ -298,7 +290,6 @@ def extraer_area(texto_ficha, next_data):
         val = max(areas_rango)
         return val, f"{val:g}"
 
-    # 4. Respaldo: Área construida en __NEXT_DATA__
     if next_data:
         for _, v in buscar_claves_json(next_data, {"builtArea", "area", "totalArea", "areaConstruida"}):
             try:
@@ -455,7 +446,6 @@ def recolectar_apartamentos_fincaraiz(page, url_busqueda):
         if any(bad in link_limpio for bad in ["/pagina", "/arriendo/apartamentos", "/dolares", "/hasta-"]):
             continue
 
-        # Solo apartamentos en arriendo
         m_id = re.search(r"/apartamento-en-arriendo-[^/]+/(\d{6,})$", link_limpio)
         if m_id:
             prop_id = m_id.group(1)
