@@ -9,18 +9,14 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# 1. Fincaraíz: Prioriza 'publicado-ayer' (últimas 48 horas: ayer y hoy) + respaldo por localidades
+# Doble red de búsqueda en Fincaraíz:
+# 1) Publicados entre ayer y hoy en todo Bogotá (filtrados luego por polígono exacto)
+# 2) Publicados últimos 7 días específicamente en tus localidades de interés
 URLS_FINCARAIZ = [
     "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/publicado-ayer?&IDmoneda=4",
     "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/publicado-ayer/pagina2?&IDmoneda=4",
     "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4",
-]
-
-# 2. Metrocuadrado (Búsquedas prefiltradas por habitaciones, precio y área)
-URLS_METROCUADRADO = [
-    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-norte/2-o-mas-habitaciones/hasta-2.8-millones/desde-60-m2/?search=form",
-    "https://www.metrocuadrado.com/apartamento-casa/arriendo/bogota/zona-noroccidente/2-o-mas-habitaciones/hasta-2.8-millones/desde-60-m2/?search=form",
-    "https://www.metrocuadrado.com/apartamento/arriendo/bogota/2.8-millones--m2/?search=form",
+    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/edificados/publicado-ultimos-7-dias/pagina2?&IDmoneda=4",
 ]
 
 # Criterios de filtrado y presupuesto
@@ -29,7 +25,7 @@ PRESUPUESTO_OBJETIVO = 2700000
 MAX_TOTAL_EXTREMO = 2800000
 MIN_HABITACIONES = 2
 MIN_AREA_M2 = 59.0
-FECHA_CORTE = "2026-11-24"  # Permite anuncios de ayer (24) y hoy (25) en adelante
+FECHA_CORTE = "2026-11-25"  # Notifica publicaciones desde ayer (25 nov) y hoy (26 nov) en adelante
 
 # Polígono de ubicación exacto (incluye Colina/Portales del Monte, Calle 153 y Bella Suiza/Sta. Bárbara)
 POLIGONO_ZONA = [
@@ -39,7 +35,7 @@ POLIGONO_ZONA = [
     (4.698282, -74.093596),  # Inferior Izquierda (Titán Plaza / Av. Boyacá con Calle 80)
 ]
 
-# Respaldo de barrios válidos dentro del polígono (se evalúa SOLO sobre URL y Título H1)
+# Respaldo de barrios válidos dentro del polígono (se evalúa SOLO si la ficha no trae GPS)
 BARRIOS_PERMITIDOS = [
     "cedritos", "cedro", "cedro golf", "bella suiza", "bosques de pinos", "barrancas",
     "santa barbara", "usaquen", "contador", "lisboa", "caobos", "capri", "molinos",
@@ -57,7 +53,7 @@ BARRIOS_PERMITIDOS = [
     "santa helena", "quinta camacho", "porciuncula", "el lago", "153"
 ]
 
-# Barrios/localidades excluidos (se evalúa SOLO sobre URL y Título H1)
+# Barrios/localidades excluidos (evaluado SOLO sobre URL y Título H1)
 BARRIOS_EXCLUIDOS = [
     "engativa", "el muelle", "fontibon", "bosa", "kennedy", "puente aranda", "subazar",
     "tibabuyes", "el poa", "la gaitana", "bilbao", "compartir", "rincon de suba", "auren",
@@ -152,16 +148,6 @@ def buscar_claves_json(obj, claves_objetivo):
         for item in obj:
             resultados.extend(buscar_claves_json(item, claves_objetivo))
     return resultados
-
-
-def extraer_enlaces_mc_de_texto(texto, encontrados):
-    for m in re.finditer(r"(/inmueble/[^/\"'\s\?]+/\d+-M\d+)", texto):
-        ruta = m.group(1)
-        link_limpio = f"https://www.metrocuadrado.com{ruta}"
-        slug = ruta.rstrip("/").split("/")[-1]
-        prop_id = f"mc_{slug}"
-        if prop_id not in encontrados:
-            encontrados[prop_id] = link_limpio
 
 
 def es_publicacion_reciente(html, next_data=None):
@@ -271,21 +257,19 @@ def extraer_canon_y_admin(html, texto_principal, next_data=None):
     return canon_val, admin_val, admin_incluida
 
 
-def extraer_datos_detalle(page, link, portal):
+def extraer_datos_fincaraiz(page, link):
     try:
         page.goto(link, wait_until="domcontentloaded", timeout=60000)
         try:
             page.wait_for_function(
                 "() => document.body && document.body.innerText.includes('$') && /hab|m²|m2/i.test(document.body.innerText)",
-                timeout=10000,
+                timeout=8000,
             )
         except Exception:
             pass
-        page.wait_for_timeout(2500)
-        page.mouse.wheel(0, 600)
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1500)
     except Exception as e:
-        print(f"Timeout cargando ({portal}), se reintentará luego: {link} ({e})")
+        print(f"REINTENTAR (Timeout): {link} ({e})")
         return None, False
 
     html = page.content()
@@ -294,15 +278,15 @@ def extraer_datos_detalle(page, link, portal):
     # 0. Verificar fecha de publicación (>= FECHA_CORTE)
     es_reciente, fecha_pub = es_publicacion_reciente(html, next_data)
     if not es_reciente:
-        print(f"Silenciado por fecha anterior a {FECHA_CORTE} ({fecha_pub}): {link}")
+        print(f"SILENCIADO (Fecha {fecha_pub} < {FECHA_CORTE}): {link}")
         return None, True
 
     h1 = page.locator("h1").first
-    titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
+    titulo = h1.inner_text().strip() if h1.count() > 0 else "Inmueble en arriendo"
 
     texto_completo = page.inner_text("body")
     if len(texto_completo.strip()) < 200:
-        print(f"Página vacía o bloqueada temporalmente ({portal}), se reintentará luego: {link}")
+        print(f"REINTENTAR (Carga incompleta): {link}")
         return None, False
 
     corte_similares = re.split(
@@ -316,23 +300,25 @@ def extraer_datos_detalle(page, link, portal):
 
     # 1. Descartar barrios o municipios excluidos
     if any(b_exc in texto_ubicacion_norm for b_exc in BARRIOS_EXCLUIDOS):
-        print(f"Descartado por barrio excluido ({portal}): {link}")
+        print(f"DESCARTADO (Barrio excluido): {link}")
         return None, True
 
     # 2. Validar polígono geográfico o barrio permitido
     lat, lon = obtener_coordenadas(html, next_data)
     if lat and lon:
         if not punto_en_poligono(lat, lon, POLIGONO_ZONA):
-            print(f"Descartado por ubicación fuera de polígono ({lat}, {lon}): {link}")
+            print(f"DESCARTADO (Fuera de polígono {lat}, {lon}): {link}")
             return None, True
         link_maps = f"https://www.google.com/maps?q={lat},{lon}"
     else:
         if not any(b_ok in texto_ubicacion_norm for b_ok in BARRIOS_PERMITIDOS):
-            print(f"Descartado por falta de coordenadas y barrio fuera de zona ({portal}): {link}")
+            print(f"DESCARTADO (Sin GPS y barrio fuera de zona): {link}")
             return None, True
         link_maps = None
 
-    # 3. Validar Área privada / construida (>= 59 m²)
+    advertencias = []
+
+    # 3. Validar Área privada / construida (>= 59 m²; si no figura, avisa en lugar de descartar)
     match_area_priv = re.search(r"[ÁA]rea\s+privada[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_ficha, re.IGNORECASE)
     if match_area_priv:
         area_str = match_area_priv.group(1)
@@ -349,15 +335,15 @@ def extraer_datos_detalle(page, link, portal):
 
     if area_val is not None:
         if area_val < MIN_AREA_M2:
-            print(f"Descartado por área menor a {MIN_AREA_M2} m² ({area_val}): {link}")
+            print(f"DESCARTADO (Área {area_val} m² < {MIN_AREA_M2} m²): {link}")
             return None, True
         tamano_fmt = f"{area_str} m²"
     else:
         tamano_fmt = "N/D"
+        advertencias.append("⚠️ <b>Área no especificada: confirmar metraje</b>")
 
-    # 4. Validar Habitaciones (>= 2) revisando URL, __NEXT_DATA__, ficha y meta description
+    # 4. Validar Habitaciones (>= 2)
     num_habs = None
-
     m_url_habs = re.search(r"-(\d+)-habitaci", link, re.IGNORECASE)
     if m_url_habs:
         num_habs = int(m_url_habs.group(1))
@@ -380,26 +366,25 @@ def extraer_datos_detalle(page, link, portal):
 
     if num_habs is not None:
         if num_habs < MIN_HABITACIONES:
-            print(f"Descartado por menos de {MIN_HABITACIONES} habitaciones ({num_habs}): {link}")
+            print(f"DESCARTADO ({num_habs} hab < {MIN_HABITACIONES}): {link}")
             return None, True
         habs_fmt = str(num_habs)
     else:
-        print(f"Descartado por no especificar número de habitaciones: {link}")
-        return None, True
+        habs_fmt = "N/D"
+        advertencias.append("⚠️ <b>Habitaciones no especificadas: verificar</b>")
 
-    # 5. Validar Canon + Administración (hasta $2.800.000 extremo, sin descartar si falta admin)
+    # 5. Validar Canon + Administración (hasta $2.800.000 extremo)
     canon_val, admin_val, admin_incluida = extraer_canon_y_admin(html, texto_ficha, next_data)
 
     if canon_val == 0:
-        print(f"Canon no cargado aún ({portal}), se reintentará luego: {link}")
+        print(f"REINTENTAR (Canon no cargado): {link}")
         return None, False
 
     total_val = canon_val + admin_val
     if total_val > MAX_TOTAL_EXTREMO:
-        print(f"Descartado por presupuesto ({formatear_pesos(total_val)} > {formatear_pesos(MAX_TOTAL_EXTREMO)}): {link}")
+        print(f"DESCARTADO (Presupuesto {formatear_pesos(total_val)} > {formatear_pesos(MAX_TOTAL_EXTREMO)}): {link}")
         return None, True
 
-    advertencias = []
     if total_val > PRESUPUESTO_OBJETIVO:
         advertencias.append("⚠️ <b>PRESUPUESTO EXTREMO (&gt; $2.7M): Evaluar negociación</b>")
 
@@ -424,8 +409,8 @@ def extraer_datos_detalle(page, link, portal):
     else:
         parqueadero_fmt = "No especificado"
 
+    print(f"ENVIADO ({titulo[:45]} | {total_fmt}): {link}")
     return {
-        "portal": portal,
         "titulo": html_lib.escape(titulo[:120]),
         "canon": canon_fmt,
         "admin": admin_fmt,
@@ -442,11 +427,11 @@ def extraer_datos_detalle(page, link, portal):
 def recolectar_fincaraiz(page, url_busqueda):
     enlaces = []
     page.goto(url_busqueda, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(4500)
+    page.wait_for_timeout(4000)
 
-    for _ in range(6):
+    for _ in range(5):
         page.mouse.wheel(0, 2000)
-        page.wait_for_timeout(900)
+        page.wait_for_timeout(800)
 
     anchors = page.locator("a[href]").all()
     for a in anchors:
@@ -469,41 +454,10 @@ def recolectar_fincaraiz(page, url_busqueda):
     return enlaces
 
 
-def recolectar_metrocuadrado(page):
-    encontrados = {}
-
-    def interceptar_respuesta(response):
-        try:
-            if "metrocuadrado.com" in response.url and response.status == 200:
-                ct = response.headers.get("content-type", "")
-                if "json" in ct or "text" in ct:
-                    cuerpo = response.text()
-                    if "/inmueble/" in cuerpo:
-                        extraer_enlaces_mc_de_texto(cuerpo, encontrados)
-        except Exception:
-            pass
-
-    page.on("response", interceptar_respuesta)
-
-    for url_mc in URLS_METROCUADRADO:
-        try:
-            page.goto(url_mc, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(4500)
-            for _ in range(5):
-                page.mouse.wheel(0, 2000)
-                page.wait_for_timeout(800)
-            extraer_enlaces_mc_de_texto(page.content(), encontrados)
-        except Exception as e:
-            print(f"Aviso navegando Metrocuadrado: {e}")
-
-    page.remove_listener("response", interceptar_respuesta)
-    print(f"Metrocuadrado: {len(encontrados)} candidatos únicos recolectados.")
-    return list(encontrados.items())
-
-
 def main():
     vistos = cargar_vistos()
     nuevos_validos = []
+    enlaces_unicos = {}
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -516,37 +470,28 @@ def main():
         page = context.new_page()
         page.route("**/*", bloquear_recursos)
 
-        # 1. Fincaraíz (publicado-ayer págs 1-2 + respaldo últimos 7 días en localidades)
-        for url_fr in URLS_FINCARAIZ:
+        # Recolectar primero todos los enlaces únicos de las 4 búsquedas de Fincaraíz
+        for idx, url_fr in enumerate(URLS_FINCARAIZ, start=1):
             try:
-                candidatos_fr = recolectar_fincaraiz(page, url_fr)
-                print(f"Fincaraíz: {len(candidatos_fr)} enlaces candidatos detectados.")
-                for prop_id, link in candidatos_fr:
-                    if prop_id in vistos:
-                        continue
-                    datos, marcar_visto = extraer_datos_detalle(page, link, "Fincaraíz")
-                    if marcar_visto:
-                        vistos.add(prop_id)
-                    if datos:
-                        nuevos_validos.append(datos)
-                    time.sleep(0.8)
+                candidatos = recolectar_fincaraiz(page, url_fr)
+                print(f"Fincaraíz [Búsqueda {idx}]: {len(candidatos)} enlaces detectados.")
+                for prop_id, link in candidatos:
+                    if prop_id not in enlaces_unicos:
+                        enlaces_unicos[prop_id] = link
             except Exception as e:
-                print(f"Error en Fincaraíz: {e}")
+                print(f"Error recolectando Fincaraíz [Búsqueda {idx}]: {e}")
 
-        # 2. Metrocuadrado
-        try:
-            candidatos_mc = recolectar_metrocuadrado(page)
-            for prop_id, link in candidatos_mc:
-                if prop_id in vistos:
-                    continue
-                datos, marcar_visto = extraer_datos_detalle(page, link, "Metrocuadrado")
-                if marcar_visto:
-                    vistos.add(prop_id)
-                if datos:
-                    nuevos_validos.append(datos)
-                time.sleep(0.8)
-        except Exception as e:
-            print(f"Error en Metrocuadrado: {e}")
+        print(f"Total enlaces únicos a evaluar: {len(enlaces_unicos)}")
+
+        for prop_id, link in enlaces_unicos.items():
+            if prop_id in vistos:
+                continue
+            datos, marcar_visto = extraer_datos_fincaraiz(page, link)
+            if marcar_visto:
+                vistos.add(prop_id)
+            if datos:
+                nuevos_validos.append(datos)
+            time.sleep(0.5)
 
         browser.close()
 
@@ -558,7 +503,7 @@ def main():
             else "📍 <b>Ubicación:</b> Zona dentro de polígono (sin pin exacto)\n"
         )
         msg = (
-            f"🏢 <b>Apartamento ({apto['portal']}):</b> {apto['titulo']}\n"
+            f"🏢 <b>Apartamento (Fincaraíz):</b> {apto['titulo']}\n"
             f"{bloque_advertencias}"
             f"💰 <b>Canon:</b> {apto['canon']}\n"
             f"🧾 <b>Administración:</b> {apto['admin']}\n"
