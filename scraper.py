@@ -9,14 +9,12 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# Búsqueda en Fincaraíz: SOLO apartamentos publicados HOY y AYER
+# Búsqueda en Fincaraíz: SOLO apartamentos en localidades del norte/noroccidente (HOY y AYER)
 URLS_FINCARAIZ = [
     "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/publicado-hoy?&IDmoneda=4",
     "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/publicado-hoy/pagina2?&IDmoneda=4",
     "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/publicado-ayer?&IDmoneda=4",
     "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/publicado-ayer/pagina2?&IDmoneda=4",
-    "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/publicado-hoy?&IDmoneda=4",
-    "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/publicado-ayer?&IDmoneda=4",
 ]
 
 # Parámetros de filtrado
@@ -25,7 +23,7 @@ MIN_CANON_REAL = 1000000
 MIN_AREA_M2 = 58.0
 MIN_HABITACIONES = 2
 
-# Barrios estrictamente dentro del polígono rojo (sin nombres genéricos de país/localidad)
+# Barrios estrictamente dentro del polígono
 BARRIOS_PERMITIDOS = [
     # Suba Oriental (al sur de Colina/153 y oriente de Av. Boyacá / Titán Plaza)
     "colina campestre", "la colina", "gratamira", "iberia", "ciudad jardin norte",
@@ -53,6 +51,12 @@ BARRIOS_PERMITIDOS = [
     "porciuncula", "avenida chile", "la castellana", "castellana", "polo club",
     "el polo", "patria", "la patria", "entre rios", "concepcion norte",
 ]
+
+# Nombres genéricos de localidad en URL que requieren abrir la ficha para confirmar el barrio exacto
+LOCALIDADES_GENERICAS_URL = {
+    "bogota", "usaquen", "suba", "chapinero", "barrios unidos",
+    "zona norte", "zona noroccidente", "norte",
+}
 
 ARCHIVO_VISTOS = "vistos.json"
 
@@ -179,12 +183,30 @@ def extraer_ubicaciones_asociadas(page, next_data):
     return [normalizar_texto(u) for u in ubicaciones if u and len(u.strip()) >= 3]
 
 
-def ubicacion_permitida(ubicaciones_asociadas):
+def evaluar_ubicacion(ubicaciones_asociadas, link):
+    """Valida si 'Ubicaciones asociadas' coincide con BARRIOS_PERMITIDOS y retorna el nombre del barrio para el log."""
+    barrio_detectado = None
+    es_permitido = False
+
     for ub in ubicaciones_asociadas:
         for barrio in BARRIOS_PERMITIDOS:
             if re.search(rf"\b{re.escape(barrio)}\b", ub):
-                return True
-    return False
+                es_permitido = True
+                barrio_detectado = ub.title()
+                break
+        if es_permitido:
+            break
+
+    if not barrio_detectado:
+        ignorados = {"colombia", "bogota", "bogota, d.c.", "bogota d.c.", "cundinamarca", "zona norte", "zona noroccidente"}
+        especificos = [u for u in ubicaciones_asociadas if u not in ignorados]
+        if especificos:
+            barrio_detectado = especificos[0].title()
+        else:
+            m_slug = re.search(r"/apartamento-en-arriendo-en-(.+)-bogota/", link)
+            barrio_detectado = m_slug.group(1).replace("-", " ").title() if m_slug else "No especificado"
+
+    return es_permitido, barrio_detectado
 
 
 def extraer_precio(html, texto_ficha, next_data):
@@ -353,13 +375,13 @@ def procesar_aviso(page, link):
             pass
         page.wait_for_timeout(1500)
     except Exception:
-        return None
+        return None, ("Sin carga (Timeout)", f"Sin carga (Timeout) | {link} | Barrio: N/D | Área: N/D | Precio: N/D")
 
     html = page.content()
     next_data = extraer_next_data(html)
     texto_completo = page.inner_text("body")
     if len(texto_completo.strip()) < 200:
-        return None
+        return None, ("Sin carga (HTML vacío)", f"Sin carga (HTML vacío) | {link} | Barrio: N/D | Área: N/D | Precio: N/D")
 
     corte_similares = re.split(
         r"Inmuebles similares|Propiedades similares|También te puede interesar|Quienes vieron este inmueble",
@@ -369,49 +391,68 @@ def procesar_aviso(page, link):
     )
     texto_ficha = corte_similares[0]
 
-    # FILTRO 1: UBICACIÓN ("Ubicaciones asociadas" ∈ barrios permitidos)
+    # Extraer todos los campos primero para que cualquier log incluya Barrio, Área y Precio
     ubicaciones = extraer_ubicaciones_asociadas(page, next_data)
-    if not ubicacion_permitida(ubicaciones):
-        print(f"{link} | Motivo: Fuera de barrios permitidos")
-        return None
+    es_ubicacion_ok, barrio_log = evaluar_ubicacion(ubicaciones, link)
+
+    canon_val, admin_val, admin_incluida = extraer_precio(html, texto_ficha, next_data)
+    if canon_val > 0:
+        if admin_incluida:
+            total_val = canon_val
+            presupuesto_txt = "Dentro del rango"
+            admin_txt = "Incluida"
+            total_txt = formatear_pesos(total_val)
+            precio_log = f"{total_txt} (Admin incluida)"
+        else:
+            total_val = canon_val + admin_val
+            presupuesto_txt = "Con advertencia: verificar valor total"
+            admin_txt = formatear_pesos(admin_val) if admin_val > 0 else "No especificada"
+            total_txt = formatear_pesos(total_val) if admin_val > 0 else f"{formatear_pesos(canon_val)} (+ administración)"
+            precio_log = (
+                f"{total_txt} (Canon: {formatear_pesos(canon_val)} + Admin: {admin_txt})"
+                if admin_val > 0
+                else f"{formatear_pesos(canon_val)} (+ Admin no especificada)"
+            )
+    else:
+        total_val = 0
+        precio_log = "No detectado"
+
+    area_val, area_str = extraer_area(texto_ficha, next_data)
+    area_log = f"{area_str} m²" if area_str else "N/D"
+
+    num_habs = extraer_habitaciones(link, texto_ficha, next_data)
+
+    # FILTRO 1: UBICACIÓN ("Ubicaciones asociadas" ∈ barrios permitidos)
+    if not es_ubicacion_ok:
+        cat = "Fuera de barrios permitidos"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}")
 
     # FILTRO 2: PRECIO (Canon + Administración <= 2.800.000 COP)
-    canon_val, admin_val, admin_incluida = extraer_precio(html, texto_ficha, next_data)
     if canon_val == 0:
-        return None
-
-    if admin_incluida:
-        total_val = canon_val
-        presupuesto_txt = "Dentro del rango"
-        admin_txt = "Incluida"
-        total_txt = formatear_pesos(total_val)
-    else:
-        total_val = canon_val + admin_val
-        presupuesto_txt = "Con advertencia: verificar valor total"
-        admin_txt = formatear_pesos(admin_val) if admin_val > 0 else "No especificada"
-        total_txt = formatear_pesos(total_val) if admin_val > 0 else f"{formatear_pesos(canon_val)} (+ administración)"
+        cat = "Sin precio detectado"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}")
 
     if total_val > MAX_PRESUPUESTO:
-        print(f"{link} | Motivo: Precio superior al presupuesto")
-        return None
+        cat = "Precio superior al presupuesto"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}")
 
     # FILTRO 3: ÁREA (>= 58 m², prioridad Área Privada)
-    area_val, area_str = extraer_area(texto_ficha, next_data)
     if area_val is None or area_val < MIN_AREA_M2:
-        print(f"{link} | Motivo: Dentro de precio, pero fuera del área solicitada")
-        return None
+        cat = "Fuera del area solicitada"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}")
 
     # FILTRO 4: HABITACIONES (>= 2)
-    num_habs = extraer_habitaciones(link, texto_ficha, next_data)
     if num_habs is None or num_habs < MIN_HABITACIONES:
-        print(f"{link} | Motivo: Menos de 2 habitaciones")
-        return None
+        cat = "Menos de 2 habitaciones"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}")
 
-    # CAMPO INFORMATIVO: Parqueadero (Sí / No)
+    # APROBADO: cumple los 4 filtros
     parqueadero_txt = extraer_parqueadero(texto_ficha, next_data)
-
     h1 = page.locator("h1").first
     titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
+
+    cat = "Area permitida (Enviado a Telegram)"
+    registro_log = (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}")
 
     return {
         "titulo": html_lib.escape(titulo[:120]),
@@ -423,7 +464,18 @@ def procesar_aviso(page, link):
         "tamano": area_str,
         "parqueadero": parqueadero_txt,
         "link": link,
-    }
+    }, registro_log
+
+
+def enlace_barrio_relevante(link_limpio):
+    """Evita abrir fichas cuyo slug ya indica un barrio ajeno a la zona permitida."""
+    m_slug = re.search(r"/apartamento-en-arriendo-en-(.+)-bogota/", link_limpio)
+    if not m_slug:
+        return True
+    slug_barrio = normalizar_texto(m_slug.group(1).replace("-", " "))
+    if slug_barrio in LOCALIDADES_GENERICAS_URL:
+        return True
+    return any(re.search(rf"\b{re.escape(b)}\b", slug_barrio) for b in BARRIOS_PERMITIDOS)
 
 
 def recolectar_apartamentos_fincaraiz(page, url_busqueda):
@@ -448,6 +500,8 @@ def recolectar_apartamentos_fincaraiz(page, url_busqueda):
 
         m_id = re.search(r"/apartamento-en-arriendo-[^/]+/(\d{6,})$", link_limpio)
         if m_id:
+            if not enlace_barrio_relevante(link_limpio):
+                continue
             prop_id = m_id.group(1)
             if prop_id not in [e[0] for e in enlaces]:
                 enlaces.append((prop_id, link_limpio))
@@ -456,9 +510,31 @@ def recolectar_apartamentos_fincaraiz(page, url_busqueda):
     return enlaces
 
 
+def imprimir_logs_ordenados(registros_log, total_revisados, total_enviados):
+    print("=" * 72)
+    print(f"Total de apartamentos nuevos revisados: {total_revisados}")
+    print(f"Enviados a Telegram: {total_enviados} | Descartados: {total_revisados - total_enviados}")
+    print("=" * 72)
+
+    if not registros_log:
+        print("No se encontraron apartamentos nuevos para revisar en esta ejecución.")
+        return
+
+    registros_ordenados = sorted(registros_log, key=lambda x: (x[0].lower(), x[1].lower()))
+    categoria_actual = None
+    for categoria, linea in registros_ordenados:
+        if categoria != categoria_actual:
+            categoria_actual = categoria
+            print(f"\n[{categoria_actual}]")
+        print(f"- {linea}")
+
+
 def main():
     vistos = cargar_vistos()
     enlaces_unicos = {}
+    registros_log = []
+    total_revisados = 0
+    total_enviados = 0
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -483,7 +559,10 @@ def main():
             if prop_id in vistos:
                 continue
 
-            apto = procesar_aviso(page, link)
+            total_revisados += 1
+            apto, registro_log = procesar_aviso(page, link)
+            registros_log.append(registro_log)
+
             if apto:
                 msg = (
                     f"🏢 <b>Nombre del Apartamento:</b> {apto['titulo']}\n"
@@ -498,6 +577,7 @@ def main():
                 )
                 enviar_telegram(msg)
                 vistos.add(prop_id)
+                total_enviados += 1
                 time.sleep(1)
 
             time.sleep(0.5)
@@ -505,6 +585,7 @@ def main():
         browser.close()
 
     guardar_vistos(vistos)
+    imprimir_logs_ordenados(registros_log, total_revisados, total_enviados)
 
 
 if __name__ == "__main__":
