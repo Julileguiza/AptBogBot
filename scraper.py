@@ -293,4 +293,291 @@ def extraer_area(texto_ficha, next_data):
             return val, m_const.group(1).replace(",", ".")
 
     areas_m2 = [
-        float(a.replace(",",
+        float(a.replace(",", "."))
+        for a in re.findall(r"(\d+(?:[.,]\d+)?)\s?m[²2]", texto_ficha[:3000], re.IGNORECASE)
+    ]
+    areas_rango = [a for a in areas_m2 if 20.0 <= a <= 1000.0]
+    if areas_rango:
+        val = max(areas_rango)
+        return val, f"{val:g}"
+
+    if next_data:
+        for _, v in buscar_claves_json(next_data, {"builtArea", "area", "totalArea", "areaConstruida"}):
+            try:
+                val = float(str(v).replace(",", "."))
+                if 20.0 <= val <= 1000.0:
+                    return val, f"{val:g}"
+            except ValueError:
+                pass
+
+    return None, None
+
+
+def extraer_habitaciones(link, texto_ficha, next_data):
+    m_url = re.search(r"-(\d+)-habitaci", link, re.IGNORECASE)
+    if m_url:
+        return int(m_url.group(1))
+
+    if next_data:
+        for _, v in buscar_claves_json(next_data, {"rooms", "bedrooms", "habitaciones", "numRooms"}):
+            try:
+                val = int(float(str(v)))
+                if 1 <= val <= 15:
+                    return val
+            except ValueError:
+                pass
+
+    m_txt = re.search(r"(\d+)\s?(?:hab|habitaci|cuarto|alcoba|dormitorio)", texto_ficha, re.IGNORECASE)
+    if m_txt:
+        return int(m_txt.group(1))
+
+    return None
+
+
+def extraer_parqueadero(texto_ficha, next_data):
+    if next_data:
+        for _, v in buscar_claves_json(next_data, {"garages", "parking", "parqueaderos", "parkingSpaces"}):
+            try:
+                if int(float(str(v))) >= 1:
+                    return "Sí"
+            except ValueError:
+                pass
+
+    if re.search(r"sin\s+(?:parqueadero|garaje)|0\s+(?:parqueadero|garaje)", texto_ficha, re.IGNORECASE):
+        return "No"
+
+    if re.search(r"([1-9]\d*)\s?(?:parqueadero|garaje|estacionamiento)|(?:con\s+parqueadero|con\s+garaje|parqueadero\s+propio|parqueadero\s+cubierto)", texto_ficha, re.IGNORECASE):
+        return "Sí"
+
+    return "No"
+
+
+def procesar_aviso(page, link):
+    """Retorna (datos_apto_o_None, registro_log, es_definitivo_para_descartar)."""
+    try:
+        page.goto(link, wait_until="domcontentloaded", timeout=60000)
+        try:
+            page.wait_for_function(
+                "() => document.body && document.body.innerText.includes('$')",
+                timeout=8000,
+            )
+        except Exception:
+            pass
+        page.wait_for_timeout(1500)
+    except Exception:
+        return None, ("Sin carga (Timeout)", f"Sin carga (Timeout) | {link} | Barrio: N/D | Área: N/D | Precio: N/D"), False
+
+    html = page.content()
+    next_data = extraer_next_data(html)
+    texto_completo = page.inner_text("body")
+    if len(texto_completo.strip()) < 200:
+        return None, ("Sin carga (HTML vacío)", f"Sin carga (HTML vacío) | {link} | Barrio: N/D | Área: N/D | Precio: N/D"), False
+
+    corte_similares = re.split(
+        r"Inmuebles similares|Propiedades similares|También te puede interesar|Quienes vieron este inmueble",
+        texto_completo,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    texto_ficha = corte_similares[0]
+
+    ubicaciones = extraer_ubicaciones_asociadas(page, next_data)
+    es_ubicacion_ok, barrio_log = evaluar_ubicacion(ubicaciones, link)
+
+    canon_val, admin_val, admin_incluida = extraer_precio(html, texto_ficha, next_data)
+    if canon_val > 0:
+        if admin_incluida:
+            total_val = canon_val
+            presupuesto_txt = "Dentro del rango"
+            admin_txt = "Incluida"
+            total_txt = formatear_pesos(total_val)
+            precio_log = f"{total_txt} (Admin incluida)"
+        else:
+            total_val = canon_val + admin_val
+            presupuesto_txt = "Con advertencia: verificar valor total"
+            admin_txt = formatear_pesos(admin_val) if admin_val > 0 else "No especificada"
+            total_txt = formatear_pesos(total_val) if admin_val > 0 else f"{formatear_pesos(canon_val)} (+ administración)"
+            precio_log = (
+                f"{total_txt} (Canon: {formatear_pesos(canon_val)} + Admin: {admin_txt})"
+                if admin_val > 0
+                else f"{formatear_pesos(canon_val)} (+ Admin no especificada)"
+            )
+    else:
+        total_val = 0
+        precio_log = "No detectado"
+
+    area_val, area_str = extraer_area(texto_ficha, next_data)
+    area_log = f"{area_str} m²" if area_str else "N/D"
+    num_habs = extraer_habitaciones(link, texto_ficha, next_data)
+
+    # FILTRO 1: UBICACIÓN
+    if not es_ubicacion_ok:
+        cat = "Fuera de barrios permitidos"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}"), True
+
+    # FILTRO 2: PRECIO
+    if canon_val == 0:
+        cat = "Sin precio detectado"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}"), False
+
+    if total_val > MAX_PRESUPUESTO:
+        cat = "Precio superior al presupuesto"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}"), True
+
+    # FILTRO 3: ÁREA
+    if area_val is None or area_val < MIN_AREA_M2:
+        cat = "Fuera del area solicitada"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}"), True
+
+    # FILTRO 4: HABITACIONES
+    if num_habs is None or num_habs < MIN_HABITACIONES:
+        cat = "Menos de 2 habitaciones"
+        return None, (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}"), True
+
+    # APROBADO
+    parqueadero_txt = extraer_parqueadero(texto_ficha, next_data)
+    h1 = page.locator("h1").first
+    titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
+
+    cat = "Area permitida (Enviado a Telegram)"
+    registro_log = (cat, f"{cat} | {link} | Barrio: {barrio_log} | Área: {area_log} | Precio: {precio_log}")
+
+    return {
+        "titulo": html_lib.escape(titulo[:120]),
+        "presupuesto": presupuesto_txt,
+        "canon": formatear_pesos(canon_val),
+        "admin": admin_txt,
+        "total": total_txt,
+        "habitaciones": str(num_habs),
+        "tamano": area_str,
+        "parqueadero": parqueadero_txt,
+        "link": link,
+    }, registro_log, False
+
+
+def enlace_barrio_relevante(link_limpio):
+    m_slug = re.search(r"/apartamento-en-arriendo-en-(.+)-bogota/", link_limpio)
+    if not m_slug:
+        return True
+    slug_barrio = normalizar_texto(m_slug.group(1).replace("-", " "))
+    if slug_barrio in LOCALIDADES_GENERICAS_URL:
+        return True
+    return any(re.search(rf"\b{re.escape(b)}\b", slug_barrio) for b in BARRIOS_PERMITIDOS)
+
+
+def recolectar_apartamentos_fincaraiz(page, url_busqueda):
+    enlaces = []
+    page.goto(url_busqueda, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(3500)
+
+    for _ in range(5):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(700)
+
+    anchors = page.locator("a[href]").all()
+    for a in anchors:
+        href = a.get_attribute("href")
+        if not href:
+            continue
+        link = f"https://www.fincaraiz.com.co{href}" if href.startswith("/") else href
+        link_limpio = link.split("?")[0].split("#")[0]
+
+        if any(bad in link_limpio for bad in ["/pagina", "/arriendo/apartamentos", "/dolares", "/hasta-"]):
+            continue
+
+        m_id = re.search(r"/apartamento-en-arriendo-[^/]+/(\d{6,})$", link_limpio)
+        if m_id:
+            if not enlace_barrio_relevante(link_limpio):
+                continue
+            prop_id = m_id.group(1)
+            if prop_id not in [e[0] for e in enlaces]:
+                enlaces.append((prop_id, link_limpio))
+        if len(enlaces) >= 50:
+            break
+    return enlaces
+
+
+def imprimir_logs_ordenados(registros_log, total_revisados, total_enviados):
+    print("=" * 72)
+    print(f"Total de apartamentos nuevos revisados: {total_revisados}")
+    print(f"Enviados a Telegram: {total_enviados} | Descartados: {total_revisados - total_enviados}")
+    print("=" * 72)
+
+    if not registros_log:
+        print("No se encontraron apartamentos nuevos para revisar en esta ejecución.")
+        return
+
+    registros_ordenados = sorted(registros_log, key=lambda x: (x[0].lower(), x[1].lower()))
+    categoria_actual = None
+    for categoria, linea in registros_ordenados:
+        if categoria != categoria_actual:
+            categoria_actual = categoria
+            print(f"\n[{categoria_actual}]")
+        print(f"- {linea}")
+
+
+def main():
+    vistos = cargar_json_set(ARCHIVO_VISTOS)
+    descartados = cargar_json_set(ARCHIVO_DESCARTADOS)
+    enlaces_unicos = {}
+    registros_log = []
+    total_revisados = 0
+    total_enviados = 0
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+            viewport={"width": 1366, "height": 768},
+            locale="es-CO",
+            timezone_id="America/Bogota",
+        )
+        page = context.new_page()
+        page.route("**/*", bloquear_recursos)
+
+        for url_fr in URLS_FINCARAIZ:
+            try:
+                for prop_id, link in recolectar_apartamentos_fincaraiz(page, url_fr):
+                    if prop_id not in enlaces_unicos:
+                        enlaces_unicos[prop_id] = link
+            except Exception:
+                pass
+
+        for prop_id, link in enlaces_unicos.items():
+            if prop_id in vistos or prop_id in descartados:
+                continue
+
+            total_revisados += 1
+            apto, registro_log, guardar_en_descartados = procesar_aviso(page, link)
+            registros_log.append(registro_log)
+
+            if apto:
+                msg = (
+                    f"🏢 <b>Nombre del Apartamento:</b> {apto['titulo']}\n"
+                    f"💰 <b>Presupuesto:</b> {apto['presupuesto']}\n"
+                    f"💵 <b>Canon:</b> {apto['canon']}\n"
+                    f"🧾 <b>Administración:</b> {apto['admin']}\n"
+                    f"💳 <b>Total Estimado:</b> {apto['total']}\n"
+                    f"🛏 <b>Habitaciones:</b> {apto['habitaciones']}\n"
+                    f"📐 <b>Tamaño:</b> {apto['tamano']} m²\n"
+                    f"🚗 <b>Parqueadero:</b> {apto['parqueadero']}\n"
+                    f"🔗 <b>Publicación (link FincaRaíz):</b> <a href='{apto['link']}'>Ver anuncio</a>"
+                )
+                if enviar_telegram(msg):
+                    vistos.add(prop_id)
+                    total_enviados += 1
+                time.sleep(1)
+            elif guardar_en_descartados:
+                descartados.add(prop_id)
+
+            time.sleep(0.5)
+
+        browser.close()
+
+    guardar_json_set(ARCHIVO_VISTOS, vistos)
+    guardar_json_set(ARCHIVO_DESCARTADOS, descartados)
+    imprimir_logs_ordenados(registros_log, total_revisados, total_enviados)
+
+
+if __name__ == "__main__":
+    main()
