@@ -9,59 +9,52 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-# Doble red de búsqueda en Fincaraíz:
-# 1) Publicados entre ayer y hoy en todo Bogotá (filtrados luego por polígono exacto)
-# 2) Publicados últimos 7 días específicamente en tus localidades de interés
+# Búsqueda en Fincaraíz: SOLO apartamentos publicados HOY y AYER
 URLS_FINCARAIZ = [
-    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/publicado-ayer?&IDmoneda=4",
-    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/publicado-ayer/pagina2?&IDmoneda=4",
-    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/edificados/publicado-ultimos-7-dias?&IDmoneda=4",
-    "https://www.fincaraiz.com.co/arriendo/casas-y-apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/m2-desde-60/edificados/publicado-ultimos-7-dias/pagina2?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/publicado-hoy?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/publicado-hoy/pagina2?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/publicado-ayer?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/usaquen-y-en-zona-norte-y-en-suba-y-en-barrios-unidos-y-en-chapinero/2-o-mas-habitaciones/hasta-2800000/publicado-ayer/pagina2?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/publicado-hoy?&IDmoneda=4",
+    "https://www.fincaraiz.com.co/arriendo/apartamentos/bogota-dc/2-o-mas-habitaciones/hasta-2800000/publicado-ayer?&IDmoneda=4",
 ]
 
-# Criterios de filtrado y presupuesto
-MIN_CANON_REAL = 1150000
-PRESUPUESTO_OBJETIVO = 2700000
-MAX_TOTAL_EXTREMO = 2800000
+# Parámetros de filtrado
+MAX_PRESUPUESTO = 2800000
+MIN_CANON_REAL = 1000000
+MIN_AREA_M2 = 58.0
 MIN_HABITACIONES = 2
-MIN_AREA_M2 = 59.0
-FECHA_CORTE = "2026-11-25"  # Notifica publicaciones desde ayer (25 nov) y hoy (26 nov) en adelante
 
-# Polígono de ubicación exacto (incluye Colina/Portales del Monte, Calle 153 y Bella Suiza/Sta. Bárbara)
-POLIGONO_ZONA = [
-    (4.750000, -74.069078),  # Superior Izquierda (Pinar / Colina Campestre / Portales del Monte)
-    (4.742000, -74.021646),  # Superior Derecha (Bosques de Pinos / Calle 161 con Cra. 7)
-    (4.653406, -74.038000),  # Inferior Derecha (Avenida Chile / Carrera 7 con Calle 72)
-    (4.698282, -74.093596),  # Inferior Izquierda (Titán Plaza / Av. Boyacá con Calle 80)
-]
-
-# Respaldo de barrios válidos dentro del polígono (se evalúa SOLO si la ficha no trae GPS)
+# Barrios permitidos derivados del polígono (se evalúa contra "Ubicaciones asociadas")
 BARRIOS_PERMITIDOS = [
-    "cedritos", "cedro", "cedro golf", "bella suiza", "bosques de pinos", "barrancas",
-    "santa barbara", "usaquen", "contador", "lisboa", "caobos", "capri", "molinos",
-    "chico", "antiguo country", "cabrera", "colina campestre", "colina", "colinas de suba",
-    "mazuren", "prado veraniego", "spring", "sotileza", "niza", "puente largo", "pasadena",
-    "alhambra", "batan", "malibu", "monaco", "santa rosa", "morato", "pontevedra",
-    "julio florez", "andes norte", "los andes", "rionegro", "santa maria del lago",
-    "castellana", "polo club", "patria", "rincon del chico", "entre rios", "simon bolivar",
-    "metropolis", "modelo norte", "alcazares", "las ferias", "gilmar", "cantagallo",
-    "victoria norte", "verbenal", "toberin", "san cristobal norte", "santa teresa",
-    "acacias", "las margaritas", "las orquideas", "del monte", "portales del monte",
-    "la calleja", "iberia", "gratamira", "ciudad jardin norte", "san patricio", "navarra",
-    "remanzo", "canaima", "mirandela", "villa del prado", "nueva zelandia",
-    "portales del norte", "britalia", "san jose del prado", "el plan", "atenas",
-    "santa helena", "quinta camacho", "porciuncula", "el lago", "153"
-]
-
-# Barrios/localidades excluidos (evaluado SOLO sobre URL y Título H1)
-BARRIOS_EXCLUIDOS = [
-    "engativa", "el muelle", "fontibon", "bosa", "kennedy", "puente aranda", "subazar",
-    "tibabuyes", "el poa", "la gaitana", "bilbao", "compartir", "rincon de suba", "auren",
-    "villas de granada", "gran granada", "ciudad salitre", "salitre", "galerias", "teusaquillo",
-    "la soledad", "chapinero alto", "chapinero central", "rosales", "pardo rubio", "marly",
-    "centro internacional", "candelaria", "san cristobal sur", "usme", "tunjuelito", "rafael uribe",
-    "soacha", "mosquera", "funza", "chia", "cajica", "cota", "madrid", "veraguas", "castilla",
-    "la igualdad", "quesada", "normandia", "aeropuerto", "modelia", "hayuelos"
+    "cedritos", "cedro", "cedro golf", "cedro bolivar", "los cedros", "bella suiza",
+    "bosques de pinos", "barrancas", "barrancas norte", "santa barbara",
+    "santa barbara central", "santa barbara occidental", "santa barbara alta",
+    "santa ana", "contador", "el contador", "lisboa", "caobos", "caobos salazar",
+    "capri", "molinos", "molinos norte", "chico", "chico norte", "chico reservado",
+    "rincon del chico", "antiguo country", "cabrera", "la cabrera", "el retiro",
+    "el nogal", "san patricio", "navarra", "santa bibiana", "la calleja",
+    "country club", "el country", "unicentro", "multicentro", "la carolina",
+    "carolina", "santa paula", "colina campestre", "colina", "colinas de suba",
+    "pinar de suba", "el pinar", "portales del monte", "del monte", "mazuren",
+    "parques de mazuren", "prado veraniego", "prado pinzon", "alcala",
+    "nueva autopista", "tierra linda", "spring", "sotileza", "niza", "niza norte",
+    "niza suba", "niza antigua", "puente largo", "pasadena", "alhambra", "batan",
+    "el batan", "malibu", "monaco", "provenza", "santa rosa", "morato", "pontevedra",
+    "potosi", "julio florez", "andes norte", "los andes", "rionegro",
+    "santa maria del lago", "castellana", "la castellana", "polo club", "el polo",
+    "patria", "la patria", "entre rios", "simon bolivar", "metropolis",
+    "modelo norte", "alcazares", "los alcazares", "san fernando", "siete de agosto",
+    "colombia", "quinta camacho", "porciuncula", "el lago", "lago gaitan",
+    "la esperanza", "las ferias", "estrada", "la estrada", "bonanza", "titan",
+    "minuto de dios", "gilmar", "cantagallo", "victoria norte", "santandersito",
+    "verbenal", "toberin", "estrella del norte", "la uribe", "san cristobal norte",
+    "santa teresa", "acacias", "las margaritas", "las orquideas", "iberia",
+    "gratamira", "ciudad jardin norte", "covadonga", "remanzo", "canaima",
+    "mirandela", "villa del prado", "nueva zelandia", "portales del norte",
+    "britalia", "san jose del prado", "el plan", "atenas", "santa helena",
+    "villa magdala", "icata", "san jose de bavaria", "la floresta", "floresta",
+    "cafam floresta"
 ]
 
 ARCHIVO_VISTOS = "vistos.json"
@@ -76,7 +69,7 @@ def cargar_vistos():
 
 def guardar_vistos(vistos):
     with open(ARCHIVO_VISTOS, "w", encoding="utf-8") as f:
-        json.dump(list(vistos), f, indent=2)
+        json.dump(sorted(list(vistos)), f, indent=2)
 
 
 def enviar_telegram(mensaje):
@@ -97,6 +90,14 @@ def bloquear_recursos(route):
         route.continue_()
 
 
+def normalizar_texto(texto):
+    reemplazos = {"á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ñ": "n"}
+    t = texto.lower().strip()
+    for k, v in reemplazos.items():
+        t = t.replace(k, v)
+    return t
+
+
 def limpiar_monto(texto_monto):
     solo_digitos = re.sub(r"[^\d]", "", texto_monto)
     return int(solo_digitos) if solo_digitos else 0
@@ -104,26 +105,6 @@ def limpiar_monto(texto_monto):
 
 def formatear_pesos(valor):
     return f"${valor:,.0f}".replace(",", ".")
-
-
-def punto_en_poligono(lat, lon, poligono):
-    dentro = False
-    j = len(poligono) - 1
-    for i in range(len(poligono)):
-        yi, xi = poligono[i]
-        yj, xj = poligono[j]
-        if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / (yj - yi + 1e-12) + xi):
-            dentro = not dentro
-        j = i
-    return dentro
-
-
-def normalizar_texto(texto):
-    reemplazos = {"á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ñ": "n"}
-    t = texto.lower()
-    for k, v in reemplazos.items():
-        t = t.replace(k, v)
-    return t
 
 
 def extraer_next_data(html):
@@ -140,7 +121,7 @@ def buscar_claves_json(obj, claves_objetivo):
     resultados = []
     if isinstance(obj, dict):
         for k, v in obj.items():
-            if k in claves_objetivo and isinstance(v, (int, float, str)):
+            if k in claves_objetivo and isinstance(v, (int, float, str, bool)):
                 resultados.append((k, v))
             else:
                 resultados.extend(buscar_claves_json(v, claves_objetivo))
@@ -150,144 +131,244 @@ def buscar_claves_json(obj, claves_objetivo):
     return resultados
 
 
-def es_publicacion_reciente(html, next_data=None):
-    fechas_encontradas = []
-    if next_data:
-        pares_fecha = buscar_claves_json(
-            next_data,
-            {"createdAt", "updatedAt", "publicationDate", "publishedAt", "dateCreated", "modificationDate"},
+def extraer_ubicaciones_asociadas(page, next_data):
+    """Extrae los elementos del campo 'Ubicaciones asociadas' del aviso."""
+    ubicaciones = []
+
+    # 1. Lectura directa desde el bloque DOM "Ubicaciones asociadas"
+    try:
+        items_dom = page.evaluate(
+            """() => {
+                const elementos = Array.from(document.querySelectorAll('h2, h3, h4, p, span, div, strong'));
+                const titulo = elementos.find(el =>
+                    el.children.length === 0 &&
+                    /ubicaciones asociadas/i.test(el.textContent || '')
+                );
+                if (!titulo) return [];
+                let contenedor = titulo.parentElement;
+                for (let i = 0; i < 3 && contenedor; i++) {
+                    const enlaces = Array.from(contenedor.querySelectorAll('a, li, span'))
+                        .map(n => (n.textContent || '').trim())
+                        .filter(t => t && !/ubicaciones asociadas/i.test(t));
+                    if (enlaces.length > 0) return enlaces;
+                    contenedor = contenedor.parentElement;
+                }
+                return [];
+            }"""
         )
-        for _, v in pares_fecha:
-            m = re.search(r"(202\d-\d{2}-\d{2})", str(v))
-            if m:
-                fechas_encontradas.append(m.group(1))
+        if items_dom:
+            ubicaciones.extend(items_dom)
+    except Exception:
+        pass
 
-    if not fechas_encontradas:
-        for m in re.finditer(r'"(?:createdAt|updatedAt|publicationDate|publishedAt|dateCreated)"\s*:\s*"(202\d-\d{2}-\d{2})', html):
-            fechas_encontradas.append(m.group(1))
-
-    if fechas_encontradas:
-        fecha_mas_reciente = max(fechas_encontradas)
-        return fecha_mas_reciente >= FECHA_CORTE, fecha_mas_reciente
-    return True, "N/D"
-
-
-def obtener_coordenadas(html, next_data=None):
+    # 2. Respaldo desde el árbol de ubicaciones en __NEXT_DATA__
     if next_data:
-        coords = dict(buscar_claves_json(next_data, {"lat", "lon", "lng", "latitude", "longitude"}))
-        lat_v = coords.get("latitude") or coords.get("lat")
-        lon_v = coords.get("longitude") or coords.get("lon") or coords.get("lng")
-        if lat_v and lon_v:
-            try:
-                lat_f, lon_f = float(lat_v), float(lon_v)
-                if 4.0 < lat_f < 5.5 and -75.0 < lon_f < -73.0:
-                    return lat_f, lon_f
-            except ValueError:
-                pass
+        def recorrer_ubicaciones(obj):
+            if isinstance(obj, dict):
+                if "locations" in obj and isinstance(obj["locations"], (dict, list)):
+                    pares = buscar_claves_json(obj["locations"], {"name", "label", "slug"})
+                    for _, val in pares:
+                        if isinstance(val, str):
+                            ubicaciones.append(val)
+                for k, v in obj.items():
+                    if k in {"neighbourhood", "neighborhood", "barrio", "zone"} and isinstance(v, str):
+                        ubicaciones.append(v)
+                    elif isinstance(v, (dict, list)):
+                        recorrer_ubicaciones(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    recorrer_ubicaciones(item)
 
-    lat_match = re.search(r'"(?:latitude|lat)"\s*:\s*(-?\d+\.\d+)', html)
-    lon_match = re.search(r'"(?:longitude|lng|lon)"\s*:\s*(-?\d+\.\d+)', html)
-    if lat_match and lon_match:
-        lat, lon = float(lat_match.group(1)), float(lon_match.group(1))
-        if 4.0 < lat < 5.5 and -75.0 < lon < -73.0:
-            return lat, lon
-    return None, None
+        recorrer_ubicaciones(next_data)
+
+    return [normalizar_texto(u) for u in ubicaciones if u and len(u.strip()) >= 3]
 
 
-def extraer_canon_y_admin(html, texto_principal, next_data=None):
+def ubicacion_permitida(ubicaciones_asociadas):
+    for ub in ubicaciones_asociadas:
+        for barrio in BARRIOS_PERMITIDOS:
+            if re.search(rf"\b{re.escape(barrio)}\b", ub):
+                return True
+    return False
+
+
+def extraer_precio(html, texto_ficha, next_data):
     canon_val = 0
     admin_val = 0
+    admin_incluida = False
 
     if next_data:
         pares = buscar_claves_json(
             next_data,
-            {"rentalPrice", "rentPrice", "canon", "price", "administration", "adminPrice", "commonExpenses", "administrationPrice"},
+            {
+                "rentalPrice", "rentPrice", "canon", "price",
+                "administration", "adminPrice", "commonExpenses",
+                "administrationPrice", "administrationIncluded",
+            },
         )
-        canones_candidatos = []
-        admins_candidatos = []
         for k, v in pares:
+            if k == "administrationIncluded" and v is True:
+                admin_incluida = True
+                continue
+            if isinstance(v, bool):
+                continue
             try:
                 num = int(float(str(v)))
             except ValueError:
                 continue
             if k in {"administration", "adminPrice", "commonExpenses", "administrationPrice"}:
-                if 50000 <= num < MIN_CANON_REAL:
-                    admins_candidatos.append(num)
+                if 50000 <= num < MIN_CANON_REAL and admin_val == 0:
+                    admin_val = num
             else:
-                if MIN_CANON_REAL <= num <= 15000000:
-                    canones_candidatos.append(num)
-                elif 50000 <= num < MIN_CANON_REAL:
-                    admins_candidatos.append(num)
-
-        if canones_candidatos:
-            canon_val = canones_candidatos[0]
-        if admins_candidatos:
-            admin_val = admins_candidatos[0]
+                if MIN_CANON_REAL <= num <= 20000000 and canon_val == 0:
+                    canon_val = num
+                elif 50000 <= num < MIN_CANON_REAL and admin_val == 0:
+                    admin_val = num
 
     if canon_val == 0:
         for m in re.finditer(r'"(?:rentalPrice|canon|rentPrice|price|value)"\s*:\s*(\d{7,9})', html):
             cand = int(m.group(1))
-            if MIN_CANON_REAL <= cand <= 15000000:
+            if MIN_CANON_REAL <= cand <= 20000000:
                 canon_val = cand
                 break
 
     if canon_val == 0:
-        precios_top = re.findall(r"\$\s?([\d\.]{7,11})(?!\s*/\s*m)", texto_principal[:3200])
+        precios_top = re.findall(r"\$\s?([\d\.]{7,11})(?!\s*/\s*m)", texto_ficha[:3200])
         for p_str in precios_top:
             val = limpiar_monto(p_str)
-            if MIN_CANON_REAL <= val <= 15000000:
+            if MIN_CANON_REAL <= val <= 20000000:
                 canon_val = val
                 break
 
     if admin_val == 0:
-        json_admin = re.search(r'"(?:administration|adminPrice|commonExpenses|administrationPrice)"\s*:\s*(\d{4,8})', html)
-        if json_admin:
-            cand_admin = int(json_admin.group(1))
-            if 50000 <= cand_admin < MIN_CANON_REAL:
-                admin_val = cand_admin
-
-    if admin_val == 0:
-        match_admin = re.search(r"administraci[oó]n[^\$\d]{0,35}\$\s?([\d\.]{4,9})", texto_principal[:4000], re.IGNORECASE)
+        match_admin = re.search(
+            r"administraci[oó]n[^\$\d]{0,35}\$\s?([\d\.]{4,9})",
+            texto_ficha[:4000],
+            re.IGNORECASE,
+        )
         if match_admin:
             cand = limpiar_monto(match_admin.group(1))
             if 50000 <= cand < MIN_CANON_REAL and cand != canon_val:
                 admin_val = cand
 
-    admin_incluida = bool(re.search(r"administraci[oó]n\s+incluida|incluye\s+administraci[oó]n|gastos\s+comunes\s+incluidos", texto_principal[:3500], re.IGNORECASE))
+    if not admin_incluida:
+        admin_incluida = bool(
+            re.search(
+                r"administraci[oó]n\s+incluida|incluye\s+administraci[oó]n|con\s+administraci[oó]n\s+incluida|gastos\s+comunes\s+incluidos",
+                texto_ficha[:3500],
+                re.IGNORECASE,
+            )
+        )
+
     return canon_val, admin_val, admin_incluida
 
 
-def extraer_datos_fincaraiz(page, link):
+def extraer_area(texto_ficha, next_data):
+    """Prioridad 1: Área Privada. Prioridad 2: Área (construida) solo si no trae Área Privada."""
+    # 1. Área Privada en ficha visible
+    m_priv = re.search(r"[ÁA]rea\s+privada[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_ficha, re.IGNORECASE)
+    if m_priv:
+        val = float(m_priv.group(1).replace(",", "."))
+        if val > 0:
+            return val, m_priv.group(1).replace(",", ".")
+
+    # 2. Área Privada en __NEXT_DATA__
+    if next_data:
+        for _, v in buscar_claves_json(next_data, {"privateArea", "areaPrivada", "private_area"}):
+            try:
+                val = float(str(v).replace(",", "."))
+                if 20.0 <= val <= 500.0:
+                    return val, f"{val:g}"
+            except ValueError:
+                pass
+
+    # 3. Respaldo: Área construida / Área general en ficha visible
+    m_const = re.search(r"[ÁA]rea(?:\s+construida|\s+total)?[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_ficha, re.IGNORECASE)
+    if m_const:
+        val = float(m_const.group(1).replace(",", "."))
+        if 20.0 <= val <= 500.0:
+            return val, m_const.group(1).replace(",", ".")
+
+    areas_m2 = [
+        float(a.replace(",", "."))
+        for a in re.findall(r"(\d+(?:[.,]\d+)?)\s?m[²2]", texto_ficha[:3000], re.IGNORECASE)
+    ]
+    areas_rango = [a for a in areas_m2 if 20.0 <= a <= 500.0]
+    if areas_rango:
+        val = max(areas_rango)
+        return val, f"{val:g}"
+
+    # 4. Respaldo: Área construida en __NEXT_DATA__
+    if next_data:
+        for _, v in buscar_claves_json(next_data, {"builtArea", "area", "totalArea", "areaConstruida"}):
+            try:
+                val = float(str(v).replace(",", "."))
+                if 20.0 <= val <= 500.0:
+                    return val, f"{val:g}"
+            except ValueError:
+                pass
+
+    return None, None
+
+
+def extraer_habitaciones(link, texto_ficha, next_data):
+    m_url = re.search(r"-(\d+)-habitaci", link, re.IGNORECASE)
+    if m_url:
+        return int(m_url.group(1))
+
+    if next_data:
+        for _, v in buscar_claves_json(next_data, {"rooms", "bedrooms", "habitaciones", "numRooms"}):
+            try:
+                val = int(float(str(v)))
+                if 1 <= val <= 15:
+                    return val
+            except ValueError:
+                pass
+
+    m_txt = re.search(r"(\d+)\s?(?:hab|habitaci|cuarto|alcoba|dormitorio)", texto_ficha, re.IGNORECASE)
+    if m_txt:
+        return int(m_txt.group(1))
+
+    return None
+
+
+def extraer_parqueadero(texto_ficha, next_data):
+    if next_data:
+        for _, v in buscar_claves_json(next_data, {"garages", "parking", "parqueaderos", "parkingSpaces"}):
+            try:
+                if int(float(str(v))) >= 1:
+                    return "Sí"
+            except ValueError:
+                pass
+
+    if re.search(r"sin\s+(?:parqueadero|garaje)|0\s+(?:parqueadero|garaje)", texto_ficha, re.IGNORECASE):
+        return "No"
+
+    if re.search(r"([1-9]\d*)\s?(?:parqueadero|garaje|estacionamiento)|(?:con\s+parqueadero|con\s+garaje|parqueadero\s+propio|parqueadero\s+cubierto)", texto_ficha, re.IGNORECASE):
+        return "Sí"
+
+    return "No"
+
+
+def procesar_aviso(page, link):
     try:
         page.goto(link, wait_until="domcontentloaded", timeout=60000)
         try:
             page.wait_for_function(
-                "() => document.body && document.body.innerText.includes('$') && /hab|m²|m2/i.test(document.body.innerText)",
+                "() => document.body && document.body.innerText.includes('$')",
                 timeout=8000,
             )
         except Exception:
             pass
         page.wait_for_timeout(1500)
-    except Exception as e:
-        print(f"REINTENTAR (Timeout): {link} ({e})")
-        return None, False
+    except Exception:
+        return None
 
     html = page.content()
     next_data = extraer_next_data(html)
-
-    # 0. Verificar fecha de publicación (>= FECHA_CORTE)
-    es_reciente, fecha_pub = es_publicacion_reciente(html, next_data)
-    if not es_reciente:
-        print(f"SILENCIADO (Fecha {fecha_pub} < {FECHA_CORTE}): {link}")
-        return None, True
-
-    h1 = page.locator("h1").first
-    titulo = h1.inner_text().strip() if h1.count() > 0 else "Inmueble en arriendo"
-
     texto_completo = page.inner_text("body")
     if len(texto_completo.strip()) < 200:
-        print(f"REINTENTAR (Carga incompleta): {link}")
-        return None, False
+        return None
 
     corte_similares = re.split(
         r"Inmuebles similares|Propiedades similares|También te puede interesar|Quienes vieron este inmueble",
@@ -296,142 +377,72 @@ def extraer_datos_fincaraiz(page, link):
         flags=re.IGNORECASE,
     )
     texto_ficha = corte_similares[0]
-    texto_ubicacion_norm = normalizar_texto(f"{link} {titulo}")
 
-    # 1. Descartar barrios o municipios excluidos
-    if any(b_exc in texto_ubicacion_norm for b_exc in BARRIOS_EXCLUIDOS):
-        print(f"DESCARTADO (Barrio excluido): {link}")
-        return None, True
+    # FILTRO 1: UBICACIÓN ("Ubicaciones asociadas" ∈ barrios permitidos)
+    ubicaciones = extraer_ubicaciones_asociadas(page, next_data)
+    if not ubicacion_permitida(ubicaciones):
+        print(f"{link} | Motivo: Fuera de barrios permitidos")
+        return None
 
-    # 2. Validar polígono geográfico o barrio permitido
-    lat, lon = obtener_coordenadas(html, next_data)
-    if lat and lon:
-        if not punto_en_poligono(lat, lon, POLIGONO_ZONA):
-            print(f"DESCARTADO (Fuera de polígono {lat}, {lon}): {link}")
-            return None, True
-        link_maps = f"https://www.google.com/maps?q={lat},{lon}"
-    else:
-        if not any(b_ok in texto_ubicacion_norm for b_ok in BARRIOS_PERMITIDOS):
-            print(f"DESCARTADO (Sin GPS y barrio fuera de zona): {link}")
-            return None, True
-        link_maps = None
-
-    advertencias = []
-
-    # 3. Validar Área privada / construida (>= 59 m²; si no figura, avisa en lugar de descartar)
-    match_area_priv = re.search(r"[ÁA]rea\s+privada[^\d]{0,15}(\d+(?:[.,]\d+)?)", texto_ficha, re.IGNORECASE)
-    if match_area_priv:
-        area_str = match_area_priv.group(1)
-        area_val = float(area_str.replace(",", "."))
-    else:
-        areas_encontradas = [float(a.replace(",", ".")) for a in re.findall(r"(\d+(?:[.,]\d+)?)\s?m[²2]", texto_ficha[:3000], re.IGNORECASE)]
-        areas_validas_rango = [a for a in areas_encontradas if 25.0 <= a <= 400.0]
-        if areas_validas_rango:
-            area_val = max(areas_validas_rango)
-            area_str = f"{area_val:g}"
-        else:
-            area_val = None
-            area_str = None
-
-    if area_val is not None:
-        if area_val < MIN_AREA_M2:
-            print(f"DESCARTADO (Área {area_val} m² < {MIN_AREA_M2} m²): {link}")
-            return None, True
-        tamano_fmt = f"{area_str} m²"
-    else:
-        tamano_fmt = "N/D"
-        advertencias.append("⚠️ <b>Área no especificada: confirmar metraje</b>")
-
-    # 4. Validar Habitaciones (>= 2)
-    num_habs = None
-    m_url_habs = re.search(r"-(\d+)-habitaci", link, re.IGNORECASE)
-    if m_url_habs:
-        num_habs = int(m_url_habs.group(1))
-
-    if num_habs is None and next_data:
-        pares_habs = buscar_claves_json(next_data, {"rooms", "bedrooms", "habitaciones", "numRooms"})
-        for _, v in pares_habs:
-            try:
-                val_h = int(float(str(v)))
-                if 1 <= val_h <= 10:
-                    num_habs = val_h
-                    break
-            except ValueError:
-                pass
-
-    if num_habs is None:
-        m_texto_habs = re.search(r"(\d+)\s?(?:hab|habitaci|cuarto|alcoba|dormitorio)", f"{texto_ficha} {html[:4000]}", re.IGNORECASE)
-        if m_texto_habs:
-            num_habs = int(m_texto_habs.group(1))
-
-    if num_habs is not None:
-        if num_habs < MIN_HABITACIONES:
-            print(f"DESCARTADO ({num_habs} hab < {MIN_HABITACIONES}): {link}")
-            return None, True
-        habs_fmt = str(num_habs)
-    else:
-        habs_fmt = "N/D"
-        advertencias.append("⚠️ <b>Habitaciones no especificadas: verificar</b>")
-
-    # 5. Validar Canon + Administración (hasta $2.800.000 extremo)
-    canon_val, admin_val, admin_incluida = extraer_canon_y_admin(html, texto_ficha, next_data)
-
+    # FILTRO 2: PRECIO (Canon + Administración <= 2.800.000 COP)
+    canon_val, admin_val, admin_incluida = extraer_precio(html, texto_ficha, next_data)
     if canon_val == 0:
-        print(f"REINTENTAR (Canon no cargado): {link}")
-        return None, False
+        return None
 
-    total_val = canon_val + admin_val
-    if total_val > MAX_TOTAL_EXTREMO:
-        print(f"DESCARTADO (Presupuesto {formatear_pesos(total_val)} > {formatear_pesos(MAX_TOTAL_EXTREMO)}): {link}")
-        return None, True
-
-    if total_val > PRESUPUESTO_OBJETIVO:
-        advertencias.append("⚠️ <b>PRESUPUESTO EXTREMO (&gt; $2.7M): Evaluar negociación</b>")
-
-    canon_fmt = formatear_pesos(canon_val)
     if admin_incluida:
-        admin_fmt = "Incluida"
-        total_fmt = canon_fmt
-    elif admin_val > 0:
-        admin_fmt = formatear_pesos(admin_val)
-        total_fmt = formatear_pesos(total_val)
+        total_val = canon_val
+        presupuesto_txt = "Dentro del rango"
+        admin_txt = "Incluida"
+        total_txt = formatear_pesos(total_val)
     else:
-        admin_fmt = "No especificada"
-        total_fmt = f"{canon_fmt} (+ admin por confirmar)"
-        advertencias.append("⚠️ <b>Admin no especificada: verificar si está incluida</b>")
+        total_val = canon_val + admin_val
+        presupuesto_txt = "Con advertencia: verificar valor total"
+        admin_txt = formatear_pesos(admin_val) if admin_val > 0 else "No especificada"
+        total_txt = formatear_pesos(total_val) if admin_val > 0 else f"{formatear_pesos(canon_val)} (+ administración)"
 
-    # 6. Parqueadero
-    match_parq = re.search(r"(\d+)\s?(?:parqueadero|garaje|estacionamiento)", texto_ficha, re.IGNORECASE)
-    if match_parq:
-        parqueadero_fmt = f"Sí ({match_parq.group(1)})"
-    elif re.search(r"parqueadero|garaje|estacionamiento", texto_ficha, re.IGNORECASE):
-        parqueadero_fmt = "Sí"
-    else:
-        parqueadero_fmt = "No especificado"
+    if total_val > MAX_PRESUPUESTO:
+        print(f"{link} | Motivo: Precio superior al presupuesto")
+        return None
 
-    print(f"ENVIADO ({titulo[:45]} | {total_fmt}): {link}")
+    # FILTRO 3: ÁREA (>= 58 m², prioridad Área Privada)
+    area_val, area_str = extraer_area(texto_ficha, next_data)
+    if area_val is None or area_val < MIN_AREA_M2:
+        print(f"{link} | Motivo: Dentro de precio, pero fuera del área solicitada")
+        return None
+
+    # FILTRO 4: HABITACIONES (>= 2)
+    num_habs = extraer_habitaciones(link, texto_ficha, next_data)
+    if num_habs is None or num_habs < MIN_HABITACIONES:
+        print(f"{link} | Motivo: Menos de 2 habitaciones")
+        return None
+
+    # CAMPO INFORMATIVO: Parqueadero (Sí / No)
+    parqueadero_txt = extraer_parqueadero(texto_ficha, next_data)
+
+    h1 = page.locator("h1").first
+    titulo = h1.inner_text().strip() if h1.count() > 0 else "Apartamento en arriendo"
+
     return {
         "titulo": html_lib.escape(titulo[:120]),
-        "canon": canon_fmt,
-        "admin": admin_fmt,
-        "total": total_fmt,
-        "habitaciones": habs_fmt,
-        "tamano": tamano_fmt,
-        "parqueadero": parqueadero_fmt,
-        "advertencias": advertencias,
-        "link_maps": link_maps,
+        "presupuesto": presupuesto_txt,
+        "canon": formatear_pesos(canon_val),
+        "admin": admin_txt,
+        "total": total_txt,
+        "habitaciones": str(num_habs),
+        "tamano": area_str,
+        "parqueadero": parqueadero_txt,
         "link": link,
-    }, True
+    }
 
 
-def recolectar_fincaraiz(page, url_busqueda):
+def recolectar_apartamentos_fincaraiz(page, url_busqueda):
     enlaces = []
     page.goto(url_busqueda, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(4000)
+    page.wait_for_timeout(3500)
 
     for _ in range(5):
         page.mouse.wheel(0, 2000)
-        page.wait_for_timeout(800)
+        page.wait_for_timeout(700)
 
     anchors = page.locator("a[href]").all()
     for a in anchors:
@@ -441,12 +452,13 @@ def recolectar_fincaraiz(page, url_busqueda):
         link = f"https://www.fincaraiz.com.co{href}" if href.startswith("/") else href
         link_limpio = link.split("?")[0].split("#")[0]
 
-        if any(bad in link_limpio for bad in ["/pagina", "/arriendo/casas-y-apartamentos", "/dolares", "/hasta-"]):
+        if any(bad in link_limpio for bad in ["/pagina", "/arriendo/apartamentos", "/dolares", "/hasta-"]):
             continue
 
-        if re.search(r"/(?:apartamento|casa)-en-arriendo-[^/]+/\d{6,}$", link_limpio):
-            slug = link_limpio.rstrip("/").split("/")[-1]
-            prop_id = f"fr_{slug}"
+        # Solo apartamentos en arriendo
+        m_id = re.search(r"/apartamento-en-arriendo-[^/]+/(\d{6,})$", link_limpio)
+        if m_id:
+            prop_id = m_id.group(1)
             if prop_id not in [e[0] for e in enlaces]:
                 enlaces.append((prop_id, link_limpio))
         if len(enlaces) >= 50:
@@ -456,7 +468,6 @@ def recolectar_fincaraiz(page, url_busqueda):
 
 def main():
     vistos = cargar_vistos()
-    nuevos_validos = []
     enlaces_unicos = {}
 
     with sync_playwright() as p:
@@ -470,55 +481,40 @@ def main():
         page = context.new_page()
         page.route("**/*", bloquear_recursos)
 
-        # Recolectar primero todos los enlaces únicos de las 4 búsquedas de Fincaraíz
-        for idx, url_fr in enumerate(URLS_FINCARAIZ, start=1):
+        for url_fr in URLS_FINCARAIZ:
             try:
-                candidatos = recolectar_fincaraiz(page, url_fr)
-                print(f"Fincaraíz [Búsqueda {idx}]: {len(candidatos)} enlaces detectados.")
-                for prop_id, link in candidatos:
+                for prop_id, link in recolectar_apartamentos_fincaraiz(page, url_fr):
                     if prop_id not in enlaces_unicos:
                         enlaces_unicos[prop_id] = link
-            except Exception as e:
-                print(f"Error recolectando Fincaraíz [Búsqueda {idx}]: {e}")
-
-        print(f"Total enlaces únicos a evaluar: {len(enlaces_unicos)}")
+            except Exception:
+                pass
 
         for prop_id, link in enlaces_unicos.items():
             if prop_id in vistos:
                 continue
-            datos, marcar_visto = extraer_datos_fincaraiz(page, link)
-            if marcar_visto:
+
+            apto = procesar_aviso(page, link)
+            if apto:
+                msg = (
+                    f"🏢 <b>Nombre del Apartamento:</b> {apto['titulo']}\n"
+                    f"💰 <b>Presupuesto:</b> {apto['presupuesto']}\n"
+                    f"💵 <b>Canon:</b> {apto['canon']}\n"
+                    f"🧾 <b>Administración:</b> {apto['admin']}\n"
+                    f"💳 <b>Total Estimado:</b> {apto['total']}\n"
+                    f"🛏 <b>Habitaciones:</b> {apto['habitaciones']}\n"
+                    f"📐 <b>Tamaño:</b> {apto['tamano']} m²\n"
+                    f"🚗 <b>Parqueadero:</b> {apto['parqueadero']}\n"
+                    f"🔗 <b>Publicación (link FincaRaíz):</b> <a href='{apto['link']}'>Ver anuncio</a>"
+                )
+                enviar_telegram(msg)
                 vistos.add(prop_id)
-            if datos:
-                nuevos_validos.append(datos)
+                time.sleep(1)
+
             time.sleep(0.5)
 
         browser.close()
 
-    for apto in nuevos_validos:
-        bloque_advertencias = ("\n".join(apto["advertencias"]) + "\n") if apto["advertencias"] else ""
-        linea_maps = (
-            f"📍 <b>Ubicación:</b> <a href='{apto['link_maps']}'>Ver en Google Maps</a>\n"
-            if apto["link_maps"]
-            else "📍 <b>Ubicación:</b> Zona dentro de polígono (sin pin exacto)\n"
-        )
-        msg = (
-            f"🏢 <b>Apartamento (Fincaraíz):</b> {apto['titulo']}\n"
-            f"{bloque_advertencias}"
-            f"💰 <b>Canon:</b> {apto['canon']}\n"
-            f"🧾 <b>Administración:</b> {apto['admin']}\n"
-            f"💵 <b>Total estimado:</b> {apto['total']}\n"
-            f"🛏 <b>Habitaciones:</b> {apto['habitaciones']}\n"
-            f"📐 <b>Tamaño:</b> {apto['tamano']}\n"
-            f"🚗 <b>Parqueadero:</b> {apto['parqueadero']}\n"
-            f"{linea_maps}"
-            f"🔗 <b>Publicación:</b> <a href='{apto['link']}'>Ver anuncio</a>"
-        )
-        enviar_telegram(msg)
-        time.sleep(1)
-
     guardar_vistos(vistos)
-    print(f"Proceso finalizado. Enviados: {len(nuevos_validos)}")
 
 
 if __name__ == "__main__":
